@@ -7,7 +7,7 @@ import { scaleReplicasAction } from './actions/scaleReplicas.js';
 import { stopDeploymentAction } from './actions/stopDeployment.js';
 import { fleetStatusProvider } from './providers/fleetStatusProvider.js';
 import { getNosanaManager } from './services/nosanaManager.js';
-import { getPipelineState, resetPipelineState } from './services/missionOrchestrator.js';
+import { getPipelineState, resetPipelineState, getMissionHistory, MissionOrchestrator } from './services/missionOrchestrator.js';
 
 export const nosanaPlugin: Plugin = {
   name: 'plugin-nosana',
@@ -74,6 +74,7 @@ export const nosanaPlugin: Plugin = {
     const { default: cors } = await import('cors');
     const app = express();
     app.use(cors());
+    app.use(express.json());
     app.get('/fleet', async (_req: any, res: any) => {
       const manager = getNosanaManager();
       const status = await manager.getFleetStatus();
@@ -95,6 +96,34 @@ export const nosanaPlugin: Plugin = {
     app.post('/fleet/mission/reset', (_req: any, res: any) => {
       resetPipelineState();
       res.json({ success: true });
+    });
+    app.get('/fleet/mission/history', (_req: any, res: any) => {
+      res.json(getMissionHistory());
+    });
+    app.post('/fleet/mission/execute', async (req: any, res: any) => {
+      const { mission } = req.body || {};
+      if (!mission) { res.status(400).json({ error: 'Missing mission in body' }); return; }
+      const state = getPipelineState();
+      if (state.status !== 'idle' && state.status !== 'complete' && state.status !== 'error') {
+        res.status(409).json({ error: 'Mission already in progress', currentStatus: state.status });
+        return;
+      }
+      resetPipelineState();
+      res.json({ success: true, message: 'Mission started. Poll /fleet/mission for status.' });
+      new MissionOrchestrator().execute(mission).catch((e: any) => console.error('[API] Mission failed:', e.message));
+    });
+    app.get('/fleet/api-docs', (_req: any, res: any) => {
+      res.json({
+        name: 'AgentForge API', version: '1.0.0',
+        endpoints: [
+          { method: 'POST', path: '/fleet/mission/execute', description: 'Start a mission', body: { mission: 'string' } },
+          { method: 'GET', path: '/fleet/mission', description: 'Get pipeline state' },
+          { method: 'POST', path: '/fleet/mission/reset', description: 'Reset pipeline' },
+          { method: 'GET', path: '/fleet/mission/history', description: 'Get mission history' },
+          { method: 'GET', path: '/fleet', description: 'Get fleet status' },
+          { method: 'GET', path: '/fleet/credits', description: 'Get credit balance' },
+        ],
+      });
     });
     app.get('/fleet/:id/activity', async (req: any, res: any) => {
       const manager = getNosanaManager();

@@ -14,6 +14,7 @@ export interface PipelineStep {
   market?: string;
   costPerHour?: number;
   outputPreview?: string;
+  output?: string;
   error?: string;
   dependsOn?: string | string[];
   depth?: number;

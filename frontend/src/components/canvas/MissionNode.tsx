@@ -15,6 +15,8 @@ interface MissionNodeData {
   isLast: boolean;
   missionText?: string;
   finalOutput?: string;
+  isSelected?: boolean;
+  hasOutput?: boolean;
 }
 
 const TEMPLATE_ICONS: Record<string, string> = {
@@ -75,7 +77,7 @@ function MissionNodeComponent({ data }: NodeProps) {
 
   return (
     <div
-      className={`relative min-w-[220px] max-w-[260px] rounded-xl border ${style.border} ${style.bg} ${style.anim} p-4 shadow-lg`}
+      className={`relative min-w-[220px] max-w-[260px] rounded-xl border ${style.border} ${style.bg} ${style.anim} p-4 shadow-lg transition-all ${d.hasOutput ? 'cursor-pointer hover:brightness-110' : ''} ${d.isSelected ? 'ring-2 ring-indigo-500 ring-offset-2 ring-offset-zinc-950' : ''}`}
     >
       {/* Status dot */}
       <div className={`absolute top-3 right-3 w-2.5 h-2.5 rounded-full ${dot}`} />
@@ -120,7 +122,7 @@ function MissionNodeComponent({ data }: NodeProps) {
       {/* Market + cost */}
       {d.market && (st === 'deployed' || st === 'ready' || st === 'processing' || st === 'complete') && (
         <div className="text-[10px] text-zinc-600 mb-1">
-          {d.market} {d.costPerHour != null && `· $${d.costPerHour.toFixed(3)}/hr`}
+          {d.market} {d.costPerHour != null && `\u00B7 $${d.costPerHour.toFixed(3)}/hr`}
         </div>
       )}
 
@@ -143,6 +145,11 @@ function MissionNodeComponent({ data }: NodeProps) {
         <div className="mt-2 pt-2 border-t border-red-900/50">
           <p className="text-xs text-red-400 line-clamp-2">{d.error}</p>
         </div>
+      )}
+
+      {/* Click hint for completed nodes */}
+      {d.hasOutput && !d.isSelected && (
+        <div className="mt-2 text-[10px] text-indigo-400/60 text-center">Click to view output</div>
       )}
     </div>
   );

@@ -77,6 +77,7 @@ export interface MissionPipelineState {
     market?: string;
     costPerHour?: number;
     outputPreview?: string;
+    output?: string;
     error?: string;
     dependsOn?: string | string[];
     depth?: number;
@@ -102,6 +103,24 @@ export function resetPipelineState(): void {
     id: null, mission: null, status: 'idle', steps: [],
     finalOutput: null, startedAt: null, completedAt: null,
   };
+}
+
+// ── Mission history ─────────────────────────────────────
+
+interface MissionHistoryEntry {
+  id: string;
+  mission: string;
+  status: 'complete' | 'error';
+  stepsCount: number;
+  finalOutputPreview: string;
+  completedAt: number;
+  totalTime: number;
+}
+
+const missionHistory: MissionHistoryEntry[] = [];
+
+export function getMissionHistory(): MissionHistoryEntry[] {
+  return missionHistory;
 }
 
 function stepStatusForClient(node: PipelineNode): MissionPipelineState['steps'][number]['status'] {
@@ -374,6 +393,7 @@ Example parallel: "Research AI, write a blog post AND a YouTube script"
             market: marketName,
             costPerHour: marketCost,
             outputPreview: n.output?.slice(0, 300),
+            output: n.output,
             error: n.error,
             dependsOn: n.step.dependsOn,
             depth: info?.depth,
@@ -530,6 +550,14 @@ Example parallel: "Research AI, write a blog post AND a YouTube script"
       }
       currentPipelineState = { ...currentPipelineState, status: 'error', completedAt: Date.now() };
       syncState('error');
+
+      missionHistory.unshift({
+        id: missionId, mission, status: 'error', stepsCount: nodes.length,
+        finalOutputPreview: nodes.map(n => n.error).filter(Boolean).join('; ').slice(0, 100),
+        completedAt: Date.now(), totalTime: Date.now() - startTime,
+      });
+      if (missionHistory.length > 10) missionHistory.pop();
+
       throw new Error(`All pipeline steps failed: ${nodes.map(n => `${n.step.name}: ${n.error}`).join('; ')}`);
     }
 
@@ -565,6 +593,12 @@ Example parallel: "Research AI, write a blog post AND a YouTube script"
       completedAt: Date.now(),
     };
     syncState('complete');
+
+    missionHistory.unshift({
+      id: missionId, mission, status: 'complete', stepsCount: nodes.length,
+      finalOutputPreview: finalOutput.slice(0, 100), completedAt: Date.now(), totalTime,
+    });
+    if (missionHistory.length > 10) missionHistory.pop();
 
     return { success: nodes.some(n => n.status === 'complete'), steps: nodes, finalOutput, totalTime };
   }

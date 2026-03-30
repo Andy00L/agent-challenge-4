@@ -15,6 +15,7 @@ import '@xyflow/react/dist/style.css';
 
 import { MissionNode } from './MissionNode';
 import { OutputPanel } from './OutputPanel';
+import { NodeOutputPanel } from './NodeOutputPanel';
 import { useMissionStore, type PipelineStep, type PipelineStatus } from '../../stores/missionStore';
 
 const nodeTypes = { missionNode: MissionNode };
@@ -138,6 +139,7 @@ const CENTER_Y = 300;
 function MissionCanvasInner() {
   const { steps, status, mission, finalOutput, startedAt, completedAt } = useMissionStore();
   const [showOutput, setShowOutput] = useState(false);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const { fitView } = useReactFlow();
 
   const handleNewMission = async () => {
@@ -151,6 +153,13 @@ function MissionCanvasInner() {
     if (status === 'idle') setShowOutput(false);
   }, [status, finalOutput]);
 
+  // Close node panel when output panel opens
+  useEffect(() => {
+    if (showOutput) setSelectedNodeId(null);
+  }, [showOutput]);
+
+  const selectedStep = selectedNodeId ? steps.find(s => s.id === selectedNodeId) : null;
+
   // Build ReactFlow nodes + edges from pipeline steps (DAG-aware)
   const { rfNodes, rfEdges } = useMemo(() => {
     if (steps.length === 0 && status === 'idle') {
@@ -160,7 +169,7 @@ function MissionCanvasInner() {
     const allNodes: Node[] = [];
     const allEdges: Edge[] = [];
 
-    // ── Mission node (always at left center) ──
+    // ── Mission node ──
     allNodes.push({
       id: 'mission',
       type: 'missionNode',
@@ -203,21 +212,26 @@ function MissionCanvasInner() {
           costPerHour: step.costPerHour,
           isFirst: false,
           isLast: false,
+          isSelected: step.id === selectedNodeId,
+          hasOutput: !!(step.output || step.error),
         },
       });
 
       // ── Edges based on dependsOn ──
       const deps = getDeps(step);
       if (deps.length === 0) {
+        const isProcessing = step.status === 'processing' || step.status === 'deploying';
+        const isStarted = status !== 'idle' && status !== 'planning';
         allEdges.push({
           id: `e-mission-${step.id}`,
           source: 'mission',
           target: step.id,
-          animated: step.status === 'processing' || step.status === 'deploying',
+          animated: isProcessing,
+          className: isProcessing ? 'processing' : isStarted ? 'completed' : '',
           style: {
             stroke: step.status === 'error' ? '#ef4444'
-              : step.status === 'processing' ? '#3b82f6'
-              : (status !== 'idle' && status !== 'planning') ? '#22c55e'
+              : isProcessing ? '#3b82f6'
+              : isStarted ? '#22c55e'
               : '#6366f1',
             strokeWidth: 3,
             opacity: 0.8,
@@ -228,15 +242,17 @@ function MissionCanvasInner() {
           const parentStep = steps.find(s => s.id === depId);
           const isParentComplete = parentStep?.status === 'complete';
           const isError = step.status === 'error';
+          const isProcessing = step.status === 'processing';
 
           allEdges.push({
             id: `e-${depId}-${step.id}`,
             source: depId,
             target: step.id,
-            animated: step.status === 'processing',
+            animated: isProcessing,
+            className: isProcessing ? 'processing' : isParentComplete ? 'completed' : '',
             style: {
               stroke: isError ? '#ef4444'
-                : step.status === 'processing' ? '#3b82f6'
+                : isProcessing ? '#3b82f6'
                 : isParentComplete ? '#22c55e'
                 : '#6366f1',
               strokeWidth: 3,
@@ -272,11 +288,13 @@ function MissionCanvasInner() {
       );
 
       for (const leaf of leafSteps) {
+        const isFlowing = leaf.status === 'complete' && status !== 'complete';
         allEdges.push({
           id: `e-${leaf.id}-output`,
           source: leaf.id,
           target: 'output',
-          animated: leaf.status === 'complete' && status !== 'complete',
+          animated: isFlowing,
+          className: status === 'complete' ? 'completed' : isFlowing ? 'processing' : '',
           style: {
             stroke: status === 'complete' ? '#22c55e'
               : leaf.status === 'complete' ? '#3b82f6'
@@ -289,7 +307,7 @@ function MissionCanvasInner() {
     }
 
     return { rfNodes: allNodes, rfEdges: allEdges };
-  }, [steps, status, mission, finalOutput]);
+  }, [steps, status, mission, finalOutput, selectedNodeId]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(rfNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(rfEdges);
@@ -304,7 +322,7 @@ function MissionCanvasInner() {
       const timer = setTimeout(() => fitView({ padding: 0.3, duration: 400 }), 200);
       return () => clearTimeout(timer);
     }
-  }, [rfNodes.length, showOutput, fitView]);
+  }, [rfNodes.length, showOutput, selectedStep, fitView]);
 
   return (
     <div className="flex h-full bg-zinc-950">
@@ -323,6 +341,14 @@ function MissionCanvasInner() {
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             nodeTypes={nodeTypes}
+            onNodeClick={(_e, node) => {
+              if (showOutput) return;
+              const step = steps.find(s => s.id === node.id);
+              if (step?.output || step?.error) {
+                setSelectedNodeId(prev => prev === node.id ? null : node.id);
+              }
+            }}
+            onPaneClick={() => setSelectedNodeId(null)}
             fitView
             fitViewOptions={{ padding: 0.3 }}
             proOptions={{ hideAttribution: true }}
@@ -337,6 +363,10 @@ function MissionCanvasInner() {
           </ReactFlow>
         </div>
       </div>
+
+      {selectedStep && !showOutput && (
+        <NodeOutputPanel step={selectedStep} onClose={() => setSelectedNodeId(null)} />
+      )}
 
       {showOutput && finalOutput && (
         <OutputPanel

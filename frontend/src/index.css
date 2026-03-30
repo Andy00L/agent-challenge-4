@@ -25,7 +25,33 @@
 }
 
 .animate-node-glow {
-  animation: node-glow 2s ease-in-out infinite;
+  animation: node-glow-enhanced 2s ease-in-out infinite;
+}
+
+/* Enhanced processing glow */
+@keyframes node-glow-enhanced {
+  0%, 100% {
+    box-shadow: 0 0 15px 0 rgba(59, 130, 246, 0.3), 0 0 30px 0 rgba(59, 130, 246, 0.1);
+  }
+  50% {
+    box-shadow: 0 0 25px 5px rgba(59, 130, 246, 0.5), 0 0 50px 10px rgba(59, 130, 246, 0.2);
+  }
+}
+
+/* Animated edge flow */
+@keyframes edge-flow {
+  from { stroke-dashoffset: 24; }
+  to { stroke-dashoffset: 0; }
+}
+
+.react-flow__edge.processing .react-flow__edge-path {
+  stroke-dasharray: 8 4;
+  animation: edge-flow 0.4s linear infinite;
+  filter: drop-shadow(0 0 6px rgba(59, 130, 246, 0.8));
+}
+
+.react-flow__edge.completed .react-flow__edge-path {
+  filter: drop-shadow(0 0 3px rgba(34, 197, 94, 0.4));
 }
 
 /* ReactFlow dark theme overrides */
