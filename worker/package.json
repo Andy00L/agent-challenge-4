@@ -1,0 +1,23 @@
+{
+  "name": "agentforge-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "elizaos dev",
+    "start": "elizaos start",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "2.0.101",
+    "@elizaos/core": "1.7.2",
+    "@elizaos/plugin-bootstrap": "1.7.2",
+    "@elizaos/plugin-openai": "1.6.0",
+    "@elizaos/plugin-web-search": "1.0.1"
+  },
+  "devDependencies": {
+    "@elizaos/cli": "1.7.2",
+    "typescript": "^5.0.0"
+  }
+}

@@ -1,42 +1,22 @@
-/**
- * Custom Plugin Entry Point
- *
- * This file is where you can define custom actions, providers, and evaluators
- * for your ElizaOS agent. Add your logic here and reference this plugin in
- * your character file.
- *
- * ElizaOS Plugin Docs: https://elizaos.github.io/eliza/docs/core/plugins
- */
+import { readFileSync } from 'fs';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import { nosanaPlugin } from './plugins/nosana/index.js';
 
-import { type Plugin } from "@elizaos/core";
+// Load character at runtime (file is outside src/, can't use static import)
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const characterPath = resolve(__dirname, '..', 'characters', 'forge-master.character.json');
+const character = JSON.parse(readFileSync(characterPath, 'utf-8'));
 
-/**
- * Example custom action.
- * Replace this with your own action logic.
- */
-const exampleAction = {
-  name: "EXAMPLE_ACTION",
-  description: "An example action — replace with your own.",
-  similes: ["DEMO", "SAMPLE"],
-  validate: async () => true,
-  handler: async (_runtime: unknown, message: { content: { text: string } }) => {
-    console.log("Custom action triggered with message:", message.content.text);
-    return true;
-  },
-  examples: [],
+// Export as Project (not Plugin) so ElizaOS CLI loads the correct character
+const project = {
+  agents: [
+    {
+      character,
+      plugins: [nosanaPlugin],
+      init: async () => {},
+    },
+  ],
 };
 
-/**
- * Your custom plugin.
- * Add this plugin's name to the `plugins` array in your character file
- * to activate it.
- */
-export const customPlugin: Plugin = {
-  name: "custom-plugin",
-  description: "My custom ElizaOS plugin",
-  actions: [exampleAction],
-  providers: [],
-  evaluators: [],
-};
-
-export default customPlugin;
+export default project;

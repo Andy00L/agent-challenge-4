@@ -1,0 +1,26 @@
+diff --git a/dist/index.mjs b/dist/index.mjs
+index 1234567..abcdefg 100644
+--- a/dist/index.mjs
++++ b/dist/index.mjs
+@@ -45,7 +45,7 @@ function getOpenAILanguageModelCapabilities(modelId) {
+   const supportsPriorityProcessing = modelId.startsWith("gpt-4") || modelId.startsWith("gpt-5") && !modelId.startsWith("gpt-5-nano") && !modelId.startsWith("gpt-5-chat") && !modelId.startsWith("gpt-5.4-nano") || modelId.startsWith("o3") || modelId.startsWith("o4-mini");
+   const isReasoningModel = !(modelId.startsWith("gpt-3") || modelId.startsWith("gpt-4") || modelId.startsWith("chatgpt-4o") || modelId.startsWith("gpt-5-chat"));
+   const supportsNonReasoningParameters = modelId.startsWith("gpt-5.1") || modelId.startsWith("gpt-5.2") || modelId.startsWith("gpt-5.3") || modelId.startsWith("gpt-5.4");
+-  const systemMessageMode = isReasoningModel ? "developer" : "system";
++  const systemMessageMode = "system";
+   return {
+     supportsFlexProcessing,
+     supportsPriorityProcessing,
+diff --git a/dist/index.js b/dist/index.js
+index 1234567..abcdefg 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -58,7 +58,7 @@ function getOpenAILanguageModelCapabilities(modelId) {
+   const supportsPriorityProcessing = modelId.startsWith("gpt-4") || modelId.startsWith("gpt-5") && !modelId.startsWith("gpt-5-nano") && !modelId.startsWith("gpt-5-chat") && !modelId.startsWith("gpt-5.4-nano") || modelId.startsWith("o3") || modelId.startsWith("o4-mini");
+   const isReasoningModel = !(modelId.startsWith("gpt-3") || modelId.startsWith("gpt-4") || modelId.startsWith("chatgpt-4o") || modelId.startsWith("gpt-5-chat"));
+   const supportsNonReasoningParameters = modelId.startsWith("gpt-5.1") || modelId.startsWith("gpt-5.2") || modelId.startsWith("gpt-5.3") || modelId.startsWith("gpt-5.4");
+-  const systemMessageMode = isReasoningModel ? "developer" : "system";
++  const systemMessageMode = "system";
+   return {
+     supportsFlexProcessing,
+     supportsPriorityProcessing,

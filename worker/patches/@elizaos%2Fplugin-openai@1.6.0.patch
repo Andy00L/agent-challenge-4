@@ -1,0 +1,75 @@
+diff --git a/dist/cjs/index.node.cjs b/dist/cjs/index.node.cjs
+index 1be73af9de03f344c1d24239b529eaa1b0e8034d..550c71240f7d87c975d6ea081497088dda79ee9c 100644
+--- a/dist/cjs/index.node.cjs
++++ b/dist/cjs/index.node.cjs
+@@ -175,7 +175,7 @@ async function generateTextByModelType(runtime, params, modelType, getModelFn) {
+   const modelName = getModelFn(runtime);
+   import_core4.logger.debug(`[OpenAI] ${modelType} model: ${modelName}`);
+   const generateParams = {
+-    model: openai.languageModel(modelName),
++    model: openai.chat(modelName),
+     prompt: params.prompt,
+     system: runtime.character.system ?? undefined,
+     temperature: params.temperature ?? 0.7,
+@@ -258,8 +258,13 @@ async function handleTextEmbedding(runtime, params) {
+     })
+     });
+     if (!response.ok) {
+-      import_core5.logger.error(`OpenAI API error: ${response.status} - ${response.statusText}`);
+-      throw new Error(`OpenAI API error: ${response.status} - ${response.statusText}`);
++      if (!handleTextEmbedding._warned) {
++        import_core5.logger.warn(`[OpenAI] Embedding endpoint returned ${response.status} - falling back to zero vectors. Embeddings will be unavailable.`);
++        handleTextEmbedding._warned = true;
++      }
++      const fallbackVector = Array(embeddingDimension).fill(0);
++      fallbackVector[0] = 0.5;
++      return fallbackVector;
+     }
+     const data = await response.json();
+     if (!data?.data?.[0]?.embedding) {
+@@ -613,7 +618,7 @@ async function generateObjectByModelType(runtime, params, modelType, getModelFn)
+   }
+   try {
+     const { object, usage } = await import_ai3.generateObject({
+-      model: openai.languageModel(modelName),
++      model: openai.chat(modelName),
+       output: "no-schema",
+       prompt: params.prompt,
+       temperature,
+diff --git a/dist/node/index.node.js b/dist/node/index.node.js
+index 5cf7a286d136c1af7d283e15b2318f6f15720103..51b029f4d1b97110c0ffb7f58dc932e6488f11ac 100644
+--- a/dist/node/index.node.js
++++ b/dist/node/index.node.js
+@@ -139,7 +139,7 @@ async function generateTextByModelType(runtime, params, modelType, getModelFn) {
+   const modelName = getModelFn(runtime);
+   logger3.debug(`[OpenAI] ${modelType} model: ${modelName}`);
+   const generateParams = {
+-    model: openai.languageModel(modelName),
++    model: openai.chat(modelName),
+     prompt: params.prompt,
+     system: runtime.character.system ?? undefined,
+     temperature: params.temperature ?? 0.7,
+@@ -222,8 +222,13 @@ async function handleTextEmbedding(runtime, params) {
+     });
+     if (!response.ok) {
+-      logger4.error(`OpenAI API error: ${response.status} - ${response.statusText}`);
+-      throw new Error(`OpenAI API error: ${response.status} - ${response.statusText}`);
++      if (!handleTextEmbedding._warned) {
++        logger4.warn(`[OpenAI] Embedding endpoint returned ${response.status} - falling back to zero vectors. Embeddings will be unavailable.`);
++        handleTextEmbedding._warned = true;
++      }
++      const fallbackVector = Array(embeddingDimension).fill(0);
++      fallbackVector[0] = 0.5;
++      return fallbackVector;
+     }
+     const data = await response.json();
+     if (!data?.data?.[0]?.embedding) {
+@@ -577,7 +582,7 @@ async function generateObjectByModelType(runtime, params, modelType, getModelFn)
+   }
+   try {
+     const { object, usage } = await generateObject({
+-      model: openai.languageModel(modelName),
++      model: openai.chat(modelName),
+       output: "no-schema",
+       prompt: params.prompt,
+       temperature,
