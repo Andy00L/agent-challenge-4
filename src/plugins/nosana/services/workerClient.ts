@@ -48,6 +48,23 @@ export class WorkerClient {
     }
   }
 
+  /**
+   * Send a message to the worker agent and wait for its response.
+   *
+   * DUAL STRATEGY (by design):
+   *
+   * Strategy 1 — HTTP Synchronous (fast path):
+   *   ElizaOS with `transport: "http"` returns the agent's response in the
+   *   HTTP body as `agentResponse`. When it works, response arrives in ~30-60s.
+   *
+   * Strategy 2 — Channel Polling (reliable fallback):
+   *   If agentResponse is null/empty (async processing, HTTP timeout, etc.),
+   *   we poll channel messages every 3s for new agent responses.
+   *   Slower but always works regardless of ElizaOS transport behavior.
+   *
+   * Both kept intentionally — Strategy 1 is fast (~50% success with Qwen3.5),
+   * Strategy 2 is the reliable catch-all.
+   */
   async sendMessage(agentId: string, text: string, timeoutMs = 300_000): Promise<string> {
     // 1. Get or create DM channel
     const dmParams = new URLSearchParams({

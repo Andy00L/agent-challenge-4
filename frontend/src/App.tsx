@@ -6,6 +6,7 @@ import { startFleetPolling } from './lib/fleetPoller';
 import { startMissionPoller, stopMissionPoller } from './lib/missionPoller';
 import { useMissionStore } from './stores/missionStore';
 import { useFleetStore } from './stores/fleetStore';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 type Tab = 'fleet' | 'mission';
 
@@ -31,6 +32,7 @@ export default function App() {
   }, [missionStatus]);
 
   return (
+    <ErrorBoundary>
     <div className="flex h-screen bg-zinc-950 text-zinc-200">
       <div className="w-[35%] border-r border-zinc-800">
         <ChatPanel />
@@ -74,5 +76,6 @@ export default function App() {
         </div>
       </div>
     </div>
+    </ErrorBoundary>
   );
 }

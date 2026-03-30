@@ -126,7 +126,7 @@ function AgentCard({ dep, expanded, onToggle }: { dep: DeploymentInfo; expanded:
       </div>
 
       <div className="flex items-center gap-3 mb-2">
-        {agentUrl && (
+        {dep.status === 'running' && agentUrl && (
           <a
             href={agentUrl}
             target="_blank"
@@ -135,6 +135,17 @@ function AgentCard({ dep, expanded, onToggle }: { dep: DeploymentInfo; expanded:
           >
             <ExternalLink className="w-3 h-3" />
             Open Agent
+          </a>
+        )}
+        {dep.status === 'stopped' && (
+          <a
+            href={`https://deploy.nosana.com/deployments/${dep.id}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-300 transition-colors"
+          >
+            <ExternalLink className="w-3 h-3" />
+            View on Nosana
           </a>
         )}
         {dep.status === 'running' && (

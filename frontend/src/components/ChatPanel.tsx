@@ -12,6 +12,7 @@ import {
   disconnectSocket,
 } from '../lib/elizaClient';
 import { setFleetAgentId, pollFleetOnce } from '../lib/fleetPoller';
+import { useMissionStore } from '../stores/missionStore';
 
 function sanitizeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -31,6 +32,17 @@ function renderMarkdown(text: string): string {
     .replace(/^---$/gm, '<hr class="border-zinc-700 my-3">')
     .replace(/\n\n/g, '<br><br>')
     .replace(/\n/g, '<br>');
+}
+
+function enrichMessage(text: string): string {
+  if (text.includes('Mission planned!') || text.includes('agents in pipeline')) {
+    const agentCount = (text.match(/\d+\. \*\*/g) || []).length;
+    if (agentCount > 0) {
+      const estimate = agentCount * 0.048 * (5 / 60);
+      text += `\n\n**Estimated cost:** ~$${estimate.toFixed(4)} (${agentCount} agents \u00D7 $0.048/hr \u00D7 ~5min)`;
+    }
+  }
+  return text;
 }
 
 function isInternalMessage(text: string): boolean {
@@ -72,10 +84,12 @@ export function ChatPanel() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const missionStatus = useMissionStore(s => s.status);
+  const isMissionActive = missionStatus === 'deploying' || missionStatus === 'executing' || missionStatus === 'planning';
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, isMissionActive]);
 
   // Connect to agent on mount
   useEffect(() => {
@@ -238,7 +252,7 @@ export function ChatPanel() {
               {msg.role === 'user' ? (
                 msg.text
               ) : (
-                <div dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.text) }} />
+                <div dangerouslySetInnerHTML={{ __html: renderMarkdown(enrichMessage(msg.text)) }} />
               )}
             </div>
           </div>
@@ -250,6 +264,19 @@ export function ChatPanel() {
               <Loader2 className="w-4 h-4 animate-spin text-purple-400" />
               <span className="text-sm text-zinc-400">Thinking...</span>
             </div>
+          </div>
+        )}
+
+        {isMissionActive && (
+          <div className="flex items-center gap-2 px-3 py-2.5 bg-indigo-950/30 border border-indigo-800/30 rounded-lg">
+            <div className="flex gap-1">
+              <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+              <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+              <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+            </div>
+            <span className="text-xs text-indigo-300">
+              Mission in progress — watch the <strong>Mission</strong> tab for live updates
+            </span>
           </div>
         )}
 
@@ -265,7 +292,7 @@ export function ChatPanel() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Describe the agent you want to create..."
+            placeholder="Type a mission or ask AgentForge anything..."
             className="flex-1 bg-transparent outline-none text-sm text-zinc-200 placeholder-zinc-600"
             disabled={isLoading}
           />
