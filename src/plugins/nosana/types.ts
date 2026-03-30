@@ -1,7 +1,7 @@
 export interface NosanaDeploymentRecord {
   id: string;
   name: string;
-  status: 'draft' | 'starting' | 'running' | 'stopping' | 'stopped' | 'error' | 'archived';
+  status: 'draft' | 'starting' | 'running' | 'stopping' | 'stopped' | 'error' | 'archived' | 'queued';
   market: string;
   marketAddress: string;
   replicas: number;

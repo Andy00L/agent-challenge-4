@@ -10,6 +10,7 @@ try {
 
 const NOSANA_STATUS_MAP: Record<string, NosanaDeploymentRecord['status']> = {
   draft: 'draft',
+  queued: 'queued',
   error: 'error',
   starting: 'starting',
   running: 'running',
@@ -188,11 +189,83 @@ export class NosanaManager {
         console.warn('[NosanaManager] Could not verify deployment status:', verifyErr);
       }
 
-      return this.deployments.get(record.id) || record;
+      // Handle QUEUED: wait for RUNNING with automatic market fallback
+      const currentRecord = this.deployments.get(record.id) || record;
+      if (currentRecord.status === 'queued') {
+        return this.waitForRunningOrFallback(record.id, params);
+      }
+
+      return currentRecord;
     } catch (error) {
       console.error(`[NosanaManager] Deployment failed for ${params.name}:`, error);
       throw new Error(`Failed to deploy ${params.name}: ${error}`);
     }
+  }
+
+  /**
+   * Wait for a QUEUED deployment to become RUNNING.
+   * If queued too long (>120s), cancel and redeploy on the next cheapest market.
+   */
+  private async waitForRunningOrFallback(
+    deploymentId: string,
+    params: {
+      name: string;
+      dockerImage: string;
+      env: Record<string, string>;
+      replicas?: number;
+      timeout?: number;
+    },
+    triedAddresses: string[] = [],
+  ): Promise<NosanaDeploymentRecord> {
+    const record = this.deployments.get(deploymentId);
+    if (!record) throw new Error(`Deployment ${deploymentId} not found`);
+
+    const QUEUE_FALLBACK_MS = 120_000; // 2 min before trying next market
+    const MAX_QUEUE_MS = 600_000; // 10 min absolute max
+    const queueStart = Date.now();
+
+    while (Date.now() - queueStart < MAX_QUEUE_MS) {
+      await new Promise(r => setTimeout(r, 10_000));
+
+      const refreshed = await this.refreshDeploymentStatus(deploymentId);
+      if (!refreshed) break;
+
+      if (refreshed.status === 'running') return refreshed;
+
+      if (refreshed.status === 'error' || refreshed.status === 'stopped') {
+        throw new Error(`Deployment ${record.name} failed on Nosana (status: ${refreshed.status})`);
+      }
+
+      if (refreshed.status === 'queued') {
+        const elapsed = Math.floor((Date.now() - queueStart) / 1000);
+        console.log(`[NosanaManager] ${record.name}: QUEUED (${elapsed}s, waiting for available GPU node)`);
+
+        if (Date.now() - queueStart > QUEUE_FALLBACK_MS && triedAddresses.length < 3) {
+          try { await this.stopDeployment(deploymentId); } catch {}
+          this.deployments.delete(deploymentId);
+
+          triedAddresses.push(record.marketAddress);
+          const nextMarket = await this.getNextBestMarket(triedAddresses);
+          if (!nextMarket) {
+            console.log(`[NosanaManager] No alternative markets available, continuing to wait...`);
+            continue;
+          }
+
+          console.log(`[NosanaManager] Falling back to ${nextMarket.name} for ${record.name}`);
+          const newRecord = await this.createAndStartDeployment({
+            ...params,
+            resolvedMarket: nextMarket,
+          });
+          return this.waitForRunningOrFallback(newRecord.id, params, triedAddresses);
+        }
+      }
+
+      if (refreshed.status === 'starting') {
+        console.log(`[NosanaManager] ${record.name}: starting (container booting)`);
+      }
+    }
+
+    return this.deployments.get(deploymentId) || record;
   }
 
   async scaleDeployment(deploymentId: string, replicas: number): Promise<NosanaDeploymentRecord> {
@@ -265,7 +338,7 @@ export class NosanaManager {
     this.lastRefresh = now;
 
     const active = Array.from(this.deployments.values())
-      .filter(d => d.status === 'running' || d.status === 'starting');
+      .filter(d => d.status === 'running' || d.status === 'starting' || d.status === 'queued');
 
     for (const dep of active) {
       if (dep.id.startsWith('mock-')) continue;
@@ -354,6 +427,12 @@ export class NosanaManager {
     const markets = await this.getMarkets();
     // Only premium markets — community/other types reject credit payments
     return markets.find(m => m.pricePerHour > 0 && m.type === 'PREMIUM') || null;
+  }
+
+  async getNextBestMarket(excludeAddresses: string[]): Promise<GpuMarket | null> {
+    const markets = await this.getMarkets();
+    const excluded = new Set(excludeAddresses);
+    return markets.find(m => m.pricePerHour > 0 && m.type === 'PREMIUM' && !excluded.has(m.address)) || null;
   }
 
   async getCreditsBalance(): Promise<{ balance: number; currency: string } | null> {

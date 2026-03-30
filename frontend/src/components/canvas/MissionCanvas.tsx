@@ -214,6 +214,7 @@ function MissionCanvasInner() {
           isLast: false,
           isSelected: step.id === selectedNodeId,
           hasOutput: !!(step.output || step.error),
+          queuedSince: step.queuedSince,
         },
       });
 

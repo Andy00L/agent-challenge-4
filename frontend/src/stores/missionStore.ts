@@ -20,6 +20,7 @@ export interface PipelineStep {
   depth?: number;
   parallelIndex?: number;
   parallelCount?: number;
+  queuedSince?: number;
 }
 
 interface MissionState {

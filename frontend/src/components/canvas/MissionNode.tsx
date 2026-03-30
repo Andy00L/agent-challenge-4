@@ -17,6 +17,7 @@ interface MissionNodeData {
   finalOutput?: string;
   isSelected?: boolean;
   hasOutput?: boolean;
+  queuedSince?: number;
 }
 
 const TEMPLATE_ICONS: Record<string, string> = {
@@ -106,7 +107,7 @@ function MissionNodeComponent({ data }: NodeProps) {
 
       {/* Status */}
       <div className="text-[11px] uppercase tracking-wider text-zinc-500 mb-2">
-        {STATUS_LABELS[st] || st}
+        {st === 'deploying' && d.queuedSince ? 'Queued for GPU...' : (STATUS_LABELS[st] || st)}
       </div>
 
       {/* Mission text (for mission node) */}

@@ -83,6 +83,7 @@ export interface MissionPipelineState {
     depth?: number;
     parallelIndex?: number;
     parallelCount?: number;
+    queuedSince?: number;
   }>;
   finalOutput: string | null;
   startedAt: number | null;
@@ -95,6 +96,21 @@ let currentPipelineState: MissionPipelineState = {
 };
 
 export function getPipelineState(): MissionPipelineState {
+  // Enrich with live deployment status (detect QUEUED during queue wait)
+  if (currentPipelineState.steps.length > 0) {
+    const mgr = getNosanaManager();
+    return {
+      ...currentPipelineState,
+      steps: currentPipelineState.steps.map(s => {
+        if (!s.deploymentId) return s;
+        const dep = mgr.getDeployment(s.deploymentId);
+        return {
+          ...s,
+          queuedSince: dep?.status === 'queued' ? dep.startedAt.getTime() : undefined,
+        };
+      }),
+    };
+  }
   return currentPipelineState;
 }
 
