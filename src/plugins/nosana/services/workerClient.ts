@@ -48,7 +48,7 @@ export class WorkerClient {
     }
   }
 
-  async sendMessage(agentId: string, text: string, timeoutMs = 180_000): Promise<string> {
+  async sendMessage(agentId: string, text: string, timeoutMs = 300_000): Promise<string> {
     // 1. Get or create DM channel
     const dmParams = new URLSearchParams({
       currentUserId: ORCHESTRATOR_USER_ID,
@@ -80,7 +80,7 @@ export class WorkerClient {
       const msgRes = await fetch(`${this.baseUrl}/api/messaging/channels/${channelId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        signal: AbortSignal.timeout(150_000),
+        signal: AbortSignal.timeout(300_000),
         body: JSON.stringify({
           content: text,
           author_id: ORCHESTRATOR_USER_ID,

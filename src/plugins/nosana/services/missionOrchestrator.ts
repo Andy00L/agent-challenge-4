@@ -2,10 +2,46 @@ import { getNosanaManager } from './nosanaManager.js';
 import { WorkerClient } from './workerClient.js';
 import { AGENT_TEMPLATES } from '../types.js';
 
+// ── DAG helpers ─────────────────────────────────────────
+
+function getDependencies(step: { dependsOn?: string | string[] }): string[] {
+  if (!step.dependsOn) return [];
+  return Array.isArray(step.dependsOn) ? step.dependsOn : [step.dependsOn];
+}
+
+function calculateDepthLevels(steps: { id: string; dependsOn?: string | string[] }[]): Map<number, string[]> {
+  const depths = new Map<string, number>();
+
+  function getDepth(stepId: string): number {
+    if (depths.has(stepId)) return depths.get(stepId)!;
+    const step = steps.find(s => s.id === stepId);
+    if (!step) return 0;
+    const deps = getDependencies(step);
+    if (deps.length === 0) { depths.set(stepId, 0); return 0; }
+    const maxParent = Math.max(...deps.map(d => getDepth(d)));
+    const depth = maxParent + 1;
+    depths.set(stepId, depth);
+    return depth;
+  }
+
+  for (const step of steps) getDepth(step.id);
+
+  const levels = new Map<number, string[]>();
+  for (const [stepId, depth] of depths) {
+    if (!levels.has(depth)) levels.set(depth, []);
+    levels.get(depth)!.push(stepId);
+  }
+  return levels;
+}
+
+// ── Types ────────────────────────────────────────────────
+
 interface PipelineStep {
+  id: string;
   template: string;
   name: string;
   task: string;
+  dependsOn?: string | string[];
 }
 
 interface PipelineNode {
@@ -42,7 +78,10 @@ export interface MissionPipelineState {
     costPerHour?: number;
     outputPreview?: string;
     error?: string;
-    dependsOn?: string;
+    dependsOn?: string | string[];
+    depth?: number;
+    parallelIndex?: number;
+    parallelCount?: number;
   }>;
   finalOutput: string | null;
   startedAt: number | null;
@@ -68,6 +107,71 @@ export function resetPipelineState(): void {
 function stepStatusForClient(node: PipelineNode): MissionPipelineState['steps'][number]['status'] {
   if (node.status === 'deploying' && node.deploymentId) return 'deployed';
   return node.status;
+}
+
+// ── Prompts ──────────────────────────────────────────────
+
+function buildRootPrompt(task: string): string {
+  return [
+    'You are executing a task. Do NOT say "I\'ll do this" or "Let me help you." Provide your complete output IMMEDIATELY.',
+    '',
+    `TASK: ${task}`,
+    '',
+    'INSTRUCTIONS:',
+    '- Provide detailed, substantive content — not a plan or offer to help',
+    '- Include specific facts, examples, names, and details from your knowledge',
+    '- Write at least 300 words of actual content',
+    '- Do NOT ask clarifying questions — just execute with your best judgment',
+    '',
+    'PROVIDE YOUR COMPLETE OUTPUT NOW:',
+  ].join('\n');
+}
+
+function buildSequentialPrompt(task: string, parentOutput: string): string {
+  return [
+    'You are executing a task. The previous agent provided input below. Use it to complete your task.',
+    '',
+    '=== INPUT FROM PREVIOUS AGENT ===',
+    parentOutput,
+    '=== END INPUT ===',
+    '',
+    `TASK: ${task}`,
+    '',
+    'INSTRUCTIONS:',
+    '- Use ALL the information above as your source material',
+    '- Do NOT ask for more data — work with what you have',
+    '- Produce a complete, polished output ready for the end user',
+    '- Write at least 400 words of detailed content',
+    '',
+    'PRODUCE YOUR COMPLETE OUTPUT NOW:',
+  ].join('\n');
+}
+
+function buildMergePrompt(task: string, parentOutputs: { name: string; output: string }[]): string {
+  const sections = parentOutputs.map((p, i) =>
+    `=== INPUT FROM AGENT "${p.name}" (${i + 1}/${parentOutputs.length}) ===\n${p.output}\n=== END ===`
+  ).join('\n\n');
+
+  return [
+    'You are executing a task. Multiple previous agents provided their outputs below. Combine and use ALL of them.',
+    '',
+    sections,
+    '',
+    `TASK: ${task}`,
+    '',
+    'INSTRUCTIONS:',
+    '- Use ALL the inputs provided above — do not ignore any',
+    '- Combine, synthesize, and integrate the information',
+    '- Produce a cohesive, unified output',
+    '- If inputs overlap, merge them intelligently',
+    '- If inputs complement each other, weave them together',
+    '',
+    'PRODUCE YOUR COMBINED OUTPUT NOW:',
+  ].join('\n');
+}
+
+function buildFallbackPrompt(task: string, missionText: string): string {
+  return `The previous agent was unavailable. Complete this mission using your own knowledge.\n\nMISSION: ${missionText}\nTASK: ${task}\n\nProvide a complete, detailed response. Execute the task NOW:`;
 }
 
 // ── Orchestrator ─────────────────────────────────────────
@@ -96,14 +200,21 @@ export class MissionOrchestrator {
               role: 'system',
               content: `You are a mission planner for AgentForge. Given a user mission, plan a pipeline of AI agents.
 Available templates: researcher (web search + analysis), writer (content creation), monitor (tracking changes), publisher (social media), analyst (data analysis).
-Return ONLY a JSON array of steps. Each step: {"template":"...","name":"...","task":"what this agent should do"}.
+Return ONLY a JSON array of steps. Each step: {"template":"...","name":"...","task":"...","dependsOn":...}
+Rules for dependsOn:
+- dependsOn: -1 means root node (takes the original mission as input)
+- dependsOn: 0 means depends on step at index 0 (sequential)
+- dependsOn: [1, 2] means depends on BOTH step 1 AND step 2 (merge node)
+- Multiple steps with the same dependsOn run IN PARALLEL on separate GPUs
 Rules:
-- Use 1-3 agents maximum
-- First agent usually does research/gathering
-- Last agent produces the final deliverable
-- Each agent's task should reference the previous agent's output
-Example for "Research AI trends and write a blog post":
-[{"template":"researcher","name":"AI-Researcher","task":"Research the latest AI trends, breakthroughs, and industry developments. Provide a structured summary with key findings and sources."},{"template":"writer","name":"Blog-Writer","task":"Using the research provided, write an engaging 800-word blog post about the latest AI trends."}]`,
+- Use 2-5 agents maximum
+- First agent(s) are usually researchers (dependsOn: -1)
+- If multiple independent outputs are requested (e.g. "blog post AND script"), use parallel branches
+- A merge step can combine parallel branches with dependsOn: [idx1, idx2]
+Example sequential: "Research AI trends and write a blog post"
+[{"template":"researcher","name":"AI-Researcher","task":"Research the latest AI trends with specific examples","dependsOn":-1},{"template":"writer","name":"Blog-Writer","task":"Write an engaging blog post from the research","dependsOn":0}]
+Example parallel: "Research AI, write a blog post AND a YouTube script"
+[{"template":"researcher","name":"AI-Researcher","task":"Research latest AI trends","dependsOn":-1},{"template":"writer","name":"Blog-Writer","task":"Write a blog post from the research","dependsOn":0},{"template":"writer","name":"Script-Writer","task":"Write a YouTube script from the research","dependsOn":0},{"template":"analyst","name":"Final-Editor","task":"Review and combine both outputs into a summary","dependsOn":[1,2]}]`,
             },
             { role: 'user', content: mission },
           ],
@@ -118,12 +229,23 @@ Example for "Research AI trends and write a blog post":
       const jsonMatch = content.match(/\[[\s\S]*?\]/);
       if (!jsonMatch) throw new Error('No JSON array in LLM response');
 
-      const steps = JSON.parse(jsonMatch[0]) as PipelineStep[];
-      if (!Array.isArray(steps) || steps.length === 0) throw new Error('Empty pipeline');
+      const raw = JSON.parse(jsonMatch[0]) as any[];
+      if (!Array.isArray(raw) || raw.length === 0) throw new Error('Empty pipeline');
 
-      return steps
+      return raw
         .filter(s => s.template && s.name && s.task && (AGENT_TEMPLATES[s.template] || s.template === 'custom'))
-        .slice(0, 3);
+        .slice(0, 5)
+        .map((s, i) => {
+          let dependsOn: string | string[] | undefined;
+          if (s.dependsOn === -1 || s.dependsOn === null || s.dependsOn === undefined) {
+            dependsOn = undefined;
+          } else if (Array.isArray(s.dependsOn)) {
+            dependsOn = s.dependsOn.map((d: number) => `step-${d}`);
+          } else if (typeof s.dependsOn === 'number') {
+            dependsOn = `step-${s.dependsOn}`;
+          }
+          return { id: `step-${i}`, template: s.template, name: s.name, task: s.task, dependsOn };
+        });
     } catch (err) {
       console.warn('[MissionOrchestrator] LLM planning failed, using fallback:', err);
       return this.planFallback(mission);
@@ -132,44 +254,70 @@ Example for "Research AI trends and write a blog post":
 
   private planFallback(mission: string): PipelineStep[] {
     const lower = mission.toLowerCase();
+
+    // Detect "X AND Y" parallel pattern — needs 3+ meaningful segments
+    const andParts = mission.split(/\band\b/i).map(s => s.trim()).filter(s => s.length > 10);
+    if (andParts.length >= 3) {
+      const steps: PipelineStep[] = [
+        { id: 'step-0', template: 'researcher', name: 'Researcher', task: `Research the following topic thoroughly: ${mission}`, dependsOn: undefined },
+      ];
+      const writerIds: string[] = [];
+      for (let i = 1; i < andParts.length; i++) {
+        const stepId = `step-${i}`;
+        writerIds.push(stepId);
+        steps.push({ id: stepId, template: 'writer', name: `Writer-${i}`, task: `Using the research provided, ${andParts[i]}`, dependsOn: 'step-0' });
+      }
+      steps.push({
+        id: `step-${steps.length}`, template: 'analyst', name: 'Final-Editor',
+        task: 'Review and combine all outputs from the previous agents into a cohesive final document.',
+        dependsOn: writerIds,
+      });
+      return steps;
+    }
+
+    // Sequential patterns
     const steps: PipelineStep[] = [];
+    let idx = 0;
 
     if (lower.includes('research') || lower.includes('find') || lower.includes('latest') || lower.includes('trend') || lower.includes('search')) {
       steps.push({
-        template: 'researcher',
-        name: 'Researcher',
+        id: `step-${idx}`, template: 'researcher', name: 'Researcher',
         task: `Research the following topic thoroughly. Gather key facts, recent developments, notable sources, and relevant data. Provide a well-structured summary with your findings: ${mission}`,
+        dependsOn: undefined,
       });
+      idx++;
     }
 
     if (lower.includes('analy') || lower.includes('compare') || lower.includes('data')) {
       steps.push({
-        template: 'analyst',
-        name: 'Analyst',
+        id: `step-${idx}`, template: 'analyst', name: 'Analyst',
         task: `Analyze the research findings. Identify key trends, patterns, comparisons, and actionable insights related to: ${mission}`,
+        dependsOn: idx > 0 ? `step-${idx - 1}` : undefined,
       });
+      idx++;
     }
 
     if (lower.includes('write') || lower.includes('blog') || lower.includes('article') || lower.includes('content') || lower.includes('post')) {
       const format = lower.includes('blog') ? 'blog post' : lower.includes('article') ? 'article' : 'written piece';
       steps.push({
-        template: 'writer',
-        name: 'Writer',
+        id: `step-${idx}`, template: 'writer', name: 'Writer',
         task: `Using the research provided, write a polished, engaging ${format} with clear sections, compelling narrative, and a strong conclusion about: ${mission}`,
+        dependsOn: idx > 0 ? `step-${idx - 1}` : undefined,
       });
+      idx++;
     }
 
     if (steps.length === 0) {
       steps.push(
         {
-          template: 'researcher',
-          name: 'Researcher',
+          id: 'step-0', template: 'researcher', name: 'Researcher',
           task: `Thoroughly research the following topic. Gather key facts, recent developments, data points, and expert perspectives. Provide a comprehensive, well-structured summary: ${mission}`,
+          dependsOn: undefined,
         },
         {
-          template: 'writer',
-          name: 'Writer',
+          id: 'step-1', template: 'writer', name: 'Writer',
           task: `Using the research provided, synthesize the findings into a clear, well-organized report. Highlight the most important points and present actionable conclusions about: ${mission}`,
+          dependsOn: 'step-0',
         },
       );
     }
@@ -181,6 +329,7 @@ Example for "Research AI trends and write a blog post":
     const startTime = Date.now();
     const log = (msg: string) => console.log(`[MissionOrchestrator] ${msg}`);
     const missionId = `mission-${Date.now()}`;
+    const missionText = originalMission || mission;
 
     // Init pipeline state
     currentPipelineState = {
@@ -193,40 +342,50 @@ Example for "Research AI trends and write a blog post":
     const steps = await this.planPipeline(mission);
     const nodes: PipelineNode[] = steps.map(s => ({ step: s, status: 'pending' as const }));
 
-    // State sync helper — call after every node status change
+    // Calculate DAG depth levels for parallel execution
+    const levels = calculateDepthLevels(steps);
+    const maxDepth = levels.size > 0 ? Math.max(...levels.keys()) : 0;
+
+    // Pre-compute depth info for frontend layout
+    const depthInfo = new Map<string, { depth: number; parallelIndex: number; parallelCount: number }>();
+    for (const [depth, stepIds] of levels) {
+      stepIds.forEach((stepId, index) => {
+        depthInfo.set(stepId, { depth, parallelIndex: index, parallelCount: stepIds.length });
+      });
+    }
+
+    // State sync helper
     let marketName: string | undefined;
     let marketCost: number | undefined;
     const syncState = (pipelineStatus?: MissionPipelineState['status']) => {
       currentPipelineState = {
         ...currentPipelineState,
         status: pipelineStatus || currentPipelineState.status,
-        steps: nodes.map((n, i) => ({
-          id: `step-${i}`,
-          name: n.step.name,
-          template: n.step.template,
-          task: n.step.task,
-          status: stepStatusForClient(n),
-          deploymentId: n.deploymentId,
-          url: n.url,
-          market: marketName,
-          costPerHour: marketCost,
-          outputPreview: n.output?.slice(0, 300),
-          error: n.error,
-          dependsOn: i > 0 ? `step-${i - 1}` : undefined,
-        })),
+        steps: nodes.map(n => {
+          const info = depthInfo.get(n.step.id);
+          return {
+            id: n.step.id,
+            name: n.step.name,
+            template: n.step.template,
+            task: n.step.task,
+            status: stepStatusForClient(n),
+            deploymentId: n.deploymentId,
+            url: n.url,
+            market: marketName,
+            costPerHour: marketCost,
+            outputPreview: n.output?.slice(0, 300),
+            error: n.error,
+            dependsOn: n.step.dependsOn,
+            depth: info?.depth,
+            parallelIndex: info?.parallelIndex,
+            parallelCount: info?.parallelCount,
+          };
+        }),
       };
     };
 
     syncState('deploying');
-
-    log(`pipeline:created — ${steps.length} steps: ${steps.map(s => s.template).join(' → ')}`);
-    if (callback) {
-      await callback(
-        `**Mission planned!** ${steps.length} agents in pipeline:\n` +
-        steps.map((s, i) => `${i + 1}. **${s.name}** (${s.template}) — ${s.task.slice(0, 100)}`).join('\n') +
-        '\n\nStarting pipeline on Nosana...'
-      );
-    }
+    log(`pipeline:created — ${steps.length} steps across ${levels.size} depth levels`);
 
     const manager = getNosanaManager();
     const market = await manager.getBestMarket();
@@ -238,11 +397,11 @@ Example for "Research AI trends and write a blog post":
 
     // --- Helpers ---
 
-    const deployNode = async (node: PipelineNode) => {
+    const deployOne = async (node: PipelineNode) => {
       const tmpl = AGENT_TEMPLATES[node.step.template] || AGENT_TEMPLATES['researcher'];
       node.status = 'deploying';
-      log(`node:status — ${node.step.name}: deploying`);
       syncState();
+      log(`node:status — ${node.step.name}: deploying`);
 
       try {
         const dep = await manager.createAndStartDeployment({
@@ -277,131 +436,53 @@ Example for "Research AI trends and write a blog post":
       }
     };
 
-    const waitForNodeReady = async (node: PipelineNode): Promise<boolean> => {
+    const waitReady = async (node: PipelineNode): Promise<boolean> => {
       if (node.status === 'error' || !node.url) return false;
       const client = new WorkerClient(node.url);
 
-      try {
-        await client.waitForReady(240_000);
-        node.status = 'ready';
-        log(`node:status — ${node.step.name}: ready`);
-        syncState();
-        return true;
-      } catch (err: any) {
-        log(`node:status — ${node.step.name}: waitForReady failed — ${err.message}, retrying...`);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          await client.waitForReady(240_000);
+          node.status = 'ready';
+          log(`node:status — ${node.step.name}: ready${attempt > 0 ? ' (retry)' : ''}`);
+          syncState();
+          return true;
+        } catch (err: any) {
+          log(`node:status — ${node.step.name}: waitForReady attempt ${attempt + 1} failed — ${err.message}`);
+        }
       }
 
-      try {
-        await client.waitForReady(240_000);
-        node.status = 'ready';
-        log(`node:status — ${node.step.name}: ready (retry)`);
-        syncState();
-        return true;
-      } catch (err: any) {
-        log(`node:status — ${node.step.name}: retry also failed — ${err.message}`);
-        return false;
-      }
+      node.status = 'error';
+      node.error = 'Not ready after extended wait';
+      log(`node:status — ${node.step.name}: giving up`);
+      syncState();
+      return false;
     };
 
-    // 2. Pipeline overlap execution
-    const missionText = originalMission || mission;
-    let previousOutput = '';
-    let lastSuccessfulStep = '';
-    let finalOutput = '';
-    let backgroundDeploy: Promise<void> | null = null;
-
-    for (let i = 0; i < nodes.length; i++) {
-      const node = nodes[i];
-      const nextNode = i + 1 < nodes.length ? nodes[i + 1] : null;
-
-      if (backgroundDeploy) {
-        await backgroundDeploy;
-        backgroundDeploy = null;
-      } else if (node.status === 'pending') {
-        await deployNode(node);
-      }
-
-      if (node.status === 'error' || !node.url) {
-        log(`node:status — ${node.step.name}: skipped (deploy failed: ${node.error})`);
-        if (nextNode && nextNode.status === 'pending') {
-          backgroundDeploy = deployNode(nextNode);
-        }
-        continue;
-      }
-
-      let ready = await waitForNodeReady(node);
-
-      if (!ready && node.url) {
-        if (nextNode && nextNode.status === 'pending') {
-          backgroundDeploy = deployNode(nextNode);
-        }
-
-        try {
-          const client = new WorkerClient(node.url);
-          await client.waitForReady(60_000);
-          node.status = 'ready';
-          ready = true;
-          log(`node:status — ${node.step.name}: ready (late)`);
-          syncState();
-        } catch {
-          node.status = 'error';
-          node.error = 'Not ready after extended wait';
-          log(`node:status — ${node.step.name}: giving up after extended wait`);
-          syncState();
-        }
-      }
-
-      if (!ready) {
-        continue;
-      }
-
-      if (nextNode && nextNode.status === 'pending' && !backgroundDeploy) {
-        backgroundDeploy = deployNode(nextNode);
-      }
-
-      // --- Execute this step ---
-
+    const executeOne = async (node: PipelineNode) => {
       node.status = 'processing';
-      log(`node:status — ${node.step.name}: processing`);
       syncState('executing');
+      log(`node:status — ${node.step.name}: processing`);
 
+      const deps = getDependencies(node.step);
       let prompt: string;
-      if (i === 0 || !previousOutput) {
-        prompt = [
-          'You are executing a task. Do NOT say "I\'ll do this" or "Let me help you." Provide your complete output IMMEDIATELY.',
-          '',
-          `TASK: ${node.step.task}`,
-          '',
-          'INSTRUCTIONS:',
-          '- Provide detailed, substantive content — not a plan or offer to help',
-          '- Include specific facts, examples, names, and details from your knowledge',
-          '- Write at least 300 words of actual content',
-          '- Do NOT ask clarifying questions — just execute with your best judgment',
-          '',
-          'PROVIDE YOUR COMPLETE OUTPUT NOW:',
-        ].join('\n');
-      } else {
-        prompt = [
-          'You are executing a task. The previous agent provided input below. Use it to complete your task.',
-          '',
-          '=== INPUT FROM PREVIOUS AGENT ===',
-          previousOutput,
-          '=== END INPUT ===',
-          '',
-          `TASK: ${node.step.task}`,
-          '',
-          'INSTRUCTIONS:',
-          '- Use ALL the information above as your source material',
-          '- Do NOT ask for more data — work with what you have',
-          '- Produce a complete, polished output ready for the end user',
-          '- Write at least 400 words of detailed content',
-          '',
-          'PRODUCE YOUR COMPLETE OUTPUT NOW:',
-        ].join('\n');
-      }
 
-      if (i > 0 && !previousOutput && lastSuccessfulStep === '') {
-        prompt = `The previous agent was unavailable. Complete this mission using your own knowledge.\n\nMISSION: ${missionText}\nTASK: ${node.step.task}\n\nProvide a complete, detailed response. Execute the task NOW:`;
+      if (deps.length === 0) {
+        prompt = buildRootPrompt(node.step.task);
+      } else if (deps.length === 1) {
+        const parent = nodes.find(n => n.step.id === deps[0]);
+        prompt = parent?.output
+          ? buildSequentialPrompt(node.step.task, parent.output)
+          : buildFallbackPrompt(node.step.task, missionText);
+      } else {
+        const parentOutputs = deps.map(depId => {
+          const parent = nodes.find(n => n.step.id === depId);
+          return { name: parent?.step.name || depId, output: parent?.output || '(no output from this agent)' };
+        });
+        const hasAnyOutput = parentOutputs.some(p => p.output !== '(no output from this agent)');
+        prompt = hasAnyOutput
+          ? buildMergePrompt(node.step.task, parentOutputs)
+          : buildFallbackPrompt(node.step.task, missionText);
       }
 
       try {
@@ -410,9 +491,6 @@ Example for "Research AI trends and write a blog post":
         const output = await client.sendMessage(agentId, prompt);
         node.output = output;
         node.status = 'complete';
-        previousOutput = output;
-        lastSuccessfulStep = node.step.name;
-        finalOutput = output;
         log(`node:status — ${node.step.name}: complete (${output.length} chars)`);
         syncState();
       } catch (err: any) {
@@ -421,9 +499,29 @@ Example for "Research AI trends and write a blog post":
         log(`node:status — ${node.step.name}: error — ${err.message}`);
         syncState();
       }
+    };
+
+    // 2. Execute level by level — nodes at each level run in parallel
+    for (let depth = 0; depth <= maxDepth; depth++) {
+      const levelStepIds = levels.get(depth) || [];
+      const levelNodes = levelStepIds.map(id => nodes.find(n => n.step.id === id)!).filter(Boolean);
+
+      log(`level:${depth} — ${levelNodes.length} agent(s): ${levelNodes.map(n => n.step.name).join(', ')}`);
+
+      // Deploy all at this level in parallel
+      await Promise.all(levelNodes.map(n => deployOne(n)));
+
+      // Wait for all to be ready in parallel
+      await Promise.all(levelNodes.map(n => waitReady(n)));
+
+      // Execute all ready agents in parallel
+      const readyNodes = levelNodes.filter(n => n.status === 'ready');
+      if (readyNodes.length > 0) {
+        await Promise.all(readyNodes.map(n => executeOne(n)));
+      }
     }
 
-    // Check if all steps failed
+    // 3. Check if all steps failed
     if (nodes.every(n => n.status === 'error')) {
       for (const node of nodes) {
         if (node.deploymentId) {
@@ -435,14 +533,25 @@ Example for "Research AI trends and write a blog post":
       throw new Error(`All pipeline steps failed: ${nodes.map(n => `${n.step.name}: ${n.error}`).join('; ')}`);
     }
 
-    // 3. Cleanup
+    // 4. Determine final output from leaf nodes (nodes nothing else depends on)
+    const allDepTargets = new Set(steps.flatMap(s => getDependencies(s)));
+    const leafNodes = nodes.filter(n => !allDepTargets.has(n.step.id) && n.output);
+
+    let finalOutput: string;
+    if (leafNodes.length === 1) {
+      finalOutput = leafNodes[0].output!;
+    } else if (leafNodes.length > 1) {
+      finalOutput = leafNodes.map(n => `## ${n.step.name}\n\n${n.output}`).join('\n\n---\n\n');
+    } else {
+      const completed = nodes.filter(n => n.output);
+      finalOutput = completed.length > 0 ? completed[completed.length - 1].output! : 'Mission produced no output.';
+    }
+
+    // 5. Cleanup
     log('Cleaning up mission agents...');
     for (const node of nodes) {
       if (node.deploymentId) {
-        try {
-          await manager.stopDeployment(node.deploymentId);
-          log(`Stopped ${node.step.name}`);
-        } catch {}
+        try { await manager.stopDeployment(node.deploymentId); log(`Stopped ${node.step.name}`); } catch {}
       }
     }
 
@@ -452,16 +561,11 @@ Example for "Research AI trends and write a blog post":
     currentPipelineState = {
       ...currentPipelineState,
       status: 'complete',
-      finalOutput: finalOutput || 'Mission produced no output.',
+      finalOutput,
       completedAt: Date.now(),
     };
     syncState('complete');
 
-    return {
-      success: nodes.some(n => n.status === 'complete'),
-      steps: nodes,
-      finalOutput: finalOutput || 'Mission produced no output.',
-      totalTime,
-    };
+    return { success: nodes.some(n => n.status === 'complete'), steps: nodes, finalOutput, totalTime };
   }
 }

@@ -15,7 +15,10 @@ export interface PipelineStep {
   costPerHour?: number;
   outputPreview?: string;
   error?: string;
-  dependsOn?: string;
+  dependsOn?: string | string[];
+  depth?: number;
+  parallelIndex?: number;
+  parallelCount?: number;
 }
 
 interface MissionState {

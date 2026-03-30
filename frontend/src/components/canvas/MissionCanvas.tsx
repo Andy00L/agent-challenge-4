@@ -19,6 +19,15 @@ import { useMissionStore, type PipelineStep, type PipelineStatus } from '../../s
 
 const nodeTypes = { missionNode: MissionNode };
 
+// ── DAG helper ───────────────────────────────────────────
+
+function getDeps(step: PipelineStep): string[] {
+  if (!step.dependsOn) return [];
+  return Array.isArray(step.dependsOn) ? step.dependsOn : [step.dependsOn];
+}
+
+// ── StatusBar ────────────────────────────────────────────
+
 function StatusBar({ status, startedAt, completedAt, steps }: {
   status: PipelineStatus;
   startedAt: number | null;
@@ -43,7 +52,7 @@ function StatusBar({ status, startedAt, completedAt, steps }: {
   }, [startedAt, completedAt, status]);
 
   const completedCount = steps.filter(s => s.status === 'complete').length;
-  const processingStep = steps.find(s => s.status === 'processing');
+  const processingSteps = steps.filter(s => s.status === 'processing');
   const totalCost = steps
     .filter(s => s.costPerHour && s.status !== 'pending')
     .reduce((sum, s) => sum + (s.costPerHour || 0), 0);
@@ -51,7 +60,13 @@ function StatusBar({ status, startedAt, completedAt, steps }: {
   const statusLabel =
     status === 'planning' ? 'Planning pipeline...' :
     status === 'deploying' ? 'Deploying agents...' :
-    status === 'executing' ? (processingStep ? `${processingStep.name} processing...` : 'Executing pipeline...') :
+    status === 'executing' ? (
+      processingSteps.length > 1
+        ? `${processingSteps.length} agents processing in parallel...`
+        : processingSteps.length === 1
+          ? `${processingSteps[0].name} processing...`
+          : 'Executing pipeline...'
+    ) :
     status === 'complete' ? 'Mission complete' :
     status === 'error' ? 'Pipeline error' :
     '';
@@ -82,6 +97,8 @@ function StatusBar({ status, startedAt, completedAt, steps }: {
   );
 }
 
+// ── Idle state ───────────────────────────────────────────
+
 function IdleState() {
   return (
     <div className="flex flex-col items-center justify-center h-full gap-4 text-center px-8">
@@ -94,6 +111,13 @@ function IdleState() {
   );
 }
 
+// ── Canvas inner (requires ReactFlowProvider) ────────────
+
+const SPACING_X = 300;
+const SPACING_Y = 200;
+const BASE_X = 80;
+const CENTER_Y = 300;
+
 function MissionCanvasInner() {
   const { steps, status, mission, finalOutput, startedAt, completedAt } = useMissionStore();
   const [showOutput, setShowOutput] = useState(false);
@@ -105,7 +129,7 @@ function MissionCanvasInner() {
     if (status === 'idle') setShowOutput(false);
   }, [status, finalOutput]);
 
-  // Build ReactFlow nodes from pipeline steps
+  // Build ReactFlow nodes + edges from pipeline steps (DAG-aware)
   const { rfNodes, rfEdges } = useMemo(() => {
     if (steps.length === 0 && status === 'idle') {
       return { rfNodes: [], rfEdges: [] };
@@ -113,15 +137,12 @@ function MissionCanvasInner() {
 
     const allNodes: Node[] = [];
     const allEdges: Edge[] = [];
-    const xGap = 300;
-    const y = 200;
-    let x = 50;
 
-    // Mission node
+    // ── Mission node (always at left center) ──
     allNodes.push({
       id: 'mission',
       type: 'missionNode',
-      position: { x, y },
+      position: { x: BASE_X, y: CENTER_Y },
       data: {
         label: 'Mission',
         template: 'mission',
@@ -133,12 +154,22 @@ function MissionCanvasInner() {
       },
     });
 
-    // Step nodes
+    // ── Agent step nodes ──
+    // Position based on depth (X) and parallelIndex (Y)
+    // Fall back to sequential layout if depth info is missing
+    const maxDepth = Math.max(...steps.map(s => s.depth ?? 0), 0);
+
     steps.forEach((step, i) => {
-      x += xGap;
-      const nodeId = step.id;
+      const depth = step.depth ?? i;
+      const pIdx = step.parallelIndex ?? 0;
+      const pCount = step.parallelCount ?? 1;
+
+      const x = BASE_X + (depth + 1) * SPACING_X;
+      const totalHeight = (pCount - 1) * SPACING_Y;
+      const y = CENTER_Y - totalHeight / 2 + pIdx * SPACING_Y;
+
       allNodes.push({
-        id: nodeId,
+        id: step.id,
         type: 'missionNode',
         position: { x, y },
         data: {
@@ -155,37 +186,57 @@ function MissionCanvasInner() {
         },
       });
 
-      // Edge from previous node
-      const sourceId = i === 0 ? 'mission' : steps[i - 1].id;
-      const isTargetProcessing = step.status === 'processing';
-      const isSourceComplete = i === 0
-        ? (status !== 'idle' && status !== 'planning')
-        : steps[i - 1].status === 'complete';
-      const isError = step.status === 'error';
+      // ── Edges based on dependsOn ──
+      const deps = getDeps(step);
+      if (deps.length === 0) {
+        // Root node: edge from Mission
+        allEdges.push({
+          id: `e-mission-${step.id}`,
+          source: 'mission',
+          target: step.id,
+          animated: step.status === 'processing' || step.status === 'deploying',
+          style: {
+            stroke: step.status === 'error' ? '#ef4444'
+              : step.status === 'processing' ? '#3b82f6'
+              : (status !== 'idle' && status !== 'planning') ? '#22c55e'
+              : '#6366f1',
+            strokeWidth: 3,
+            opacity: 0.8,
+          },
+        });
+      } else {
+        for (const depId of deps) {
+          const parentStep = steps.find(s => s.id === depId);
+          const isParentComplete = parentStep?.status === 'complete';
+          const isError = step.status === 'error';
 
-      allEdges.push({
-        id: `e-${sourceId}-${nodeId}`,
-        source: sourceId,
-        target: nodeId,
-        animated: isTargetProcessing,
-        style: {
-          stroke: isError ? '#ef4444' : isTargetProcessing ? '#3b82f6' : isSourceComplete ? '#22c55e' : '#6366f1',
-          strokeWidth: 3,
-          opacity: 0.8,
-        },
-      });
+          allEdges.push({
+            id: `e-${depId}-${step.id}`,
+            source: depId,
+            target: step.id,
+            animated: step.status === 'processing',
+            style: {
+              stroke: isError ? '#ef4444'
+                : step.status === 'processing' ? '#3b82f6'
+                : isParentComplete ? '#22c55e'
+                : '#6366f1',
+              strokeWidth: 3,
+              opacity: 0.8,
+            },
+          });
+        }
+      }
     });
 
-    // Output node (only if steps exist)
+    // ── Output node (right of the deepest level) ──
     if (steps.length > 0) {
-      x += xGap;
-      const lastStep = steps[steps.length - 1];
+      const outputX = BASE_X + (maxDepth + 2) * SPACING_X;
       const outputStatus = status === 'complete' ? 'output' : 'pending';
 
       allNodes.push({
         id: 'output',
         type: 'missionNode',
-        position: { x, y },
+        position: { x: outputX, y: CENTER_Y },
         data: {
           label: 'Output',
           template: 'output',
@@ -197,17 +248,27 @@ function MissionCanvasInner() {
         },
       });
 
-      allEdges.push({
-        id: `e-${lastStep.id}-output`,
-        source: lastStep.id,
-        target: 'output',
-        animated: lastStep.status === 'complete' && status !== 'complete',
-        style: {
-          stroke: status === 'complete' ? '#22c55e' : lastStep.status === 'complete' ? '#3b82f6' : '#6366f1',
-          strokeWidth: 3,
-          opacity: 0.8,
-        },
-      });
+      // Edges from leaf nodes → Output
+      // A leaf node is one that no other step depends on
+      const leafSteps = steps.filter(s =>
+        !steps.some(other => getDeps(other).includes(s.id))
+      );
+
+      for (const leaf of leafSteps) {
+        allEdges.push({
+          id: `e-${leaf.id}-output`,
+          source: leaf.id,
+          target: 'output',
+          animated: leaf.status === 'complete' && status !== 'complete',
+          style: {
+            stroke: status === 'complete' ? '#22c55e'
+              : leaf.status === 'complete' ? '#3b82f6'
+              : '#6366f1',
+            strokeWidth: 3,
+            opacity: 0.8,
+          },
+        });
+      }
     }
 
     return { rfNodes: allNodes, rfEdges: allEdges };
@@ -262,6 +323,8 @@ function MissionCanvasInner() {
     </div>
   );
 }
+
+// ── Exported wrapper ─────────────────────────────────────
 
 export function MissionCanvas() {
   const status = useMissionStore(s => s.status);
