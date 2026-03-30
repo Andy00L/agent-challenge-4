@@ -20,22 +20,48 @@ function sanitizeHtml(text: string): string {
 function renderMarkdown(text: string): string {
   const safe = sanitizeHtml(text);
   return safe
-    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.*?)\*/g, '<em>$1</em>')
-    .replace(/`([^`]+)`/g, '<code class="bg-white/10 px-1 py-0.5 rounded text-sm font-mono">$1</code>')
-    .replace(/^- (.+)$/gm, '<li class="ml-4 list-disc">$1</li>')
-    .replace(/\n/g, '<br/>');
+    .replace(/^### (.+)$/gm, '<h3 class="text-sm font-semibold text-zinc-200 mt-3 mb-1">$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2 class="text-base font-bold text-zinc-100 mt-4 mb-2">$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1 class="text-lg font-bold text-white mt-4 mb-2">$1</h1>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong class="text-zinc-100 font-semibold">$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+    .replace(/`([^`]+)`/g, '<code class="bg-zinc-800 text-indigo-300 px-1.5 py-0.5 rounded text-xs font-mono">$1</code>')
+    .replace(/^\d+\. (.+)$/gm, '<li class="ml-4 text-zinc-300">$1</li>')
+    .replace(/^- (.+)$/gm, '<li class="ml-4 text-zinc-300 list-disc">$1</li>')
+    .replace(/^---$/gm, '<hr class="border-zinc-700 my-3">')
+    .replace(/\n\n/g, '<br><br>')
+    .replace(/\n/g, '<br>');
 }
 
 function isInternalMessage(text: string): boolean {
   return /^(Executing action:|Action:|(\[Action\]))/.test(text);
 }
 
-const EXAMPLE_PROMPTS = [
-  'Create an agent that monitors Hacker News for AI papers',
-  'Build a writer agent for blog posts',
-  'Show me my fleet',
-  'Create a data analyst for crypto trends',
+const MISSION_TEMPLATES = [
+  {
+    icon: '\u{1F50D}',
+    title: 'Research Pipeline',
+    description: 'Research a topic and write a detailed blog post',
+    prompt: 'Research the latest developments in artificial intelligence and write me a comprehensive blog post',
+  },
+  {
+    icon: '\u{270D}\u{FE0F}',
+    title: 'Content Pipeline',
+    description: 'Blog post + YouTube script from research',
+    prompt: 'Research AI trends and write me a blog post AND a YouTube video script',
+  },
+  {
+    icon: '\u{1F4CA}',
+    title: 'Competitive Analysis',
+    description: 'Research competitors and create a report',
+    prompt: 'Research the top AI startups in 2026, analyze their strengths and weaknesses, and write a competitive analysis report',
+  },
+  {
+    icon: '\u{1F680}',
+    title: 'Quick Agent',
+    description: 'Deploy one agent for a specific task',
+    prompt: 'Create a research agent that monitors Hacker News for AI papers',
+  },
 ];
 
 export function ChatPanel() {
@@ -57,7 +83,6 @@ export function ChatPanel() {
 
     (async () => {
       try {
-        // 1. Discover agents
         const agents = await getAgents();
         if (!mounted) return;
         if (agents.length === 0) {
@@ -66,22 +91,18 @@ export function ChatPanel() {
           return;
         }
 
-        // Prefer AgentForge, fall back to first agent
         const agent = agents.find((a) => a.name === 'AgentForge') ?? agents[0];
         setAgentId(agent.id);
         setFleetAgentId(agent.id);
 
-        // 2. Start agent if inactive
         if (agent.status !== 'active') {
           await startAgent(agent.id);
         }
 
-        // 3. Get or create a DM channel
         const chId = await getOrCreateDmChannel(agent.id);
         if (!mounted) return;
         setChannelId(chId);
 
-        // 4. Connect socket and join channel
         await connectSocket();
         if (!mounted) return;
         joinChannel(chId);
@@ -109,7 +130,6 @@ export function ChatPanel() {
       if (isInternalMessage(text)) return;
       addMessage({ role: 'assistant', text });
       setLoading(false);
-      // Trigger fleet poll after agent response
       setTimeout(pollFleetOnce, 500);
     });
     return unsub;
@@ -132,7 +152,6 @@ export function ChatPanel() {
 
       sendSocketMessage(channelId, msg, agentId);
 
-      // Safety timeout — if no response after 60s, stop the spinner
       setTimeout(() => {
         setLoading(false);
       }, 60_000);
@@ -164,9 +183,7 @@ export function ChatPanel() {
       {/* Header */}
       <div className="flex items-center gap-3 px-5 py-4 border-b border-zinc-800">
         <div className="relative">
-          <div className="w-10 h-10 rounded-full bg-purple-600 flex items-center justify-center text-white font-bold text-sm">
-            AF
-          </div>
+          <img src="/assets/thinker.png" alt="AgentForge" className="w-10 h-10 rounded-full object-cover" />
           <div className={`absolute bottom-0 right-0 w-3 h-3 rounded-full ${statusDotColor} border-2 border-zinc-950`} />
         </div>
         <div>
@@ -184,22 +201,22 @@ export function ChatPanel() {
         )}
 
         {messages.length === 0 && !errorMsg && (
-          <div className="flex flex-col items-center justify-center h-full gap-6 text-center px-4">
-            <div className="w-16 h-16 rounded-full bg-purple-600/20 flex items-center justify-center">
-              <span className="text-2xl font-bold text-purple-400">AF</span>
-            </div>
+          <div className="flex flex-col items-center justify-center h-full gap-5 text-center px-4">
+            <img src="/assets/thinker.png" alt="AgentForge" className="w-14 h-14 rounded-full object-cover" />
             <div>
-              <h2 className="text-lg font-semibold text-zinc-200 mb-1">Welcome to AgentForge</h2>
-              <p className="text-sm text-zinc-500">Create and deploy AI agents on Nosana's decentralized GPU network</p>
+              <h2 className="text-lg font-semibold text-zinc-200 mb-1">What do you want to build?</h2>
+              <p className="text-xs text-zinc-500">Choose a template or type your own mission</p>
             </div>
-            <div className="grid grid-cols-1 gap-2 w-full max-w-sm">
-              {EXAMPLE_PROMPTS.map((prompt) => (
+            <div className="grid grid-cols-2 gap-2.5 w-full max-w-md">
+              {MISSION_TEMPLATES.map((t, i) => (
                 <button
-                  key={prompt}
-                  onClick={() => handleSend(prompt)}
-                  className="text-left text-sm text-zinc-400 hover:text-zinc-200 bg-zinc-900 hover:bg-zinc-800 rounded-lg px-4 py-3 transition-colors border border-zinc-800"
+                  key={i}
+                  onClick={() => handleSend(t.prompt)}
+                  className="text-left p-3 bg-zinc-900/80 hover:bg-zinc-800 border border-zinc-800 hover:border-indigo-500/50 rounded-lg transition-all group"
                 >
-                  {prompt}
+                  <div className="text-base mb-1">{t.icon}</div>
+                  <div className="text-xs font-medium text-zinc-200 group-hover:text-white">{t.title}</div>
+                  <div className="text-[11px] text-zinc-500 mt-0.5 line-clamp-2">{t.description}</div>
                 </button>
               ))}
             </div>
@@ -207,7 +224,10 @@ export function ChatPanel() {
         )}
 
         {messages.map((msg) => (
-          <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+          <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start items-start gap-2'}`}>
+            {msg.role === 'assistant' && (
+              <img src="/assets/thinker.png" alt="" className="w-7 h-7 rounded-full object-cover shrink-0 mt-0.5" />
+            )}
             <div
               className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
                 msg.role === 'user'

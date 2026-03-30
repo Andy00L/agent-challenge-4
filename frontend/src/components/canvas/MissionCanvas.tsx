@@ -28,11 +28,12 @@ function getDeps(step: PipelineStep): string[] {
 
 // ── StatusBar ────────────────────────────────────────────
 
-function StatusBar({ status, startedAt, completedAt, steps }: {
+function StatusBar({ status, startedAt, completedAt, steps, onNewMission }: {
   status: PipelineStatus;
   startedAt: number | null;
   completedAt: number | null;
   steps: PipelineStep[];
+  onNewMission: () => void;
 }) {
   const [elapsed, setElapsed] = useState(0);
 
@@ -53,9 +54,12 @@ function StatusBar({ status, startedAt, completedAt, steps }: {
 
   const completedCount = steps.filter(s => s.status === 'complete').length;
   const processingSteps = steps.filter(s => s.status === 'processing');
-  const totalCost = steps
+  const totalCostPerHr = steps
     .filter(s => s.costPerHour && s.status !== 'pending')
     .reduce((sum, s) => sum + (s.costPerHour || 0), 0);
+
+  const durationHrs = startedAt && completedAt ? (completedAt - startedAt) / 3_600_000 : 0;
+  const totalCostEstimate = totalCostPerHr * durationHrs;
 
   const statusLabel =
     status === 'planning' ? 'Planning pipeline...' :
@@ -90,8 +94,21 @@ function StatusBar({ status, startedAt, completedAt, steps }: {
       </div>
       <div className="flex items-center gap-4 text-zinc-500">
         <span>{completedCount}/{steps.length} complete</span>
-        {totalCost > 0 && <span>${totalCost.toFixed(3)}/hr</span>}
+        {status === 'complete' && totalCostEstimate > 0 && (
+          <span className="text-green-400">${totalCostEstimate.toFixed(4)}</span>
+        )}
+        {status !== 'complete' && status !== 'error' && totalCostPerHr > 0 && (
+          <span>${totalCostPerHr.toFixed(3)}/hr</span>
+        )}
         <span className="tabular-nums">{timeStr}</span>
+        {(status === 'complete' || status === 'error') && (
+          <button
+            onClick={onNewMission}
+            className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded transition-colors"
+          >
+            New Mission
+          </button>
+        )}
       </div>
     </div>
   );
@@ -122,6 +139,11 @@ function MissionCanvasInner() {
   const { steps, status, mission, finalOutput, startedAt, completedAt } = useMissionStore();
   const [showOutput, setShowOutput] = useState(false);
   const { fitView } = useReactFlow();
+
+  const handleNewMission = async () => {
+    useMissionStore.getState().reset();
+    try { await fetch('/fleet/mission/reset', { method: 'POST' }); } catch {}
+  };
 
   // Auto-show output panel when mission completes
   useEffect(() => {
@@ -155,8 +177,6 @@ function MissionCanvasInner() {
     });
 
     // ── Agent step nodes ──
-    // Position based on depth (X) and parallelIndex (Y)
-    // Fall back to sequential layout if depth info is missing
     const maxDepth = Math.max(...steps.map(s => s.depth ?? 0), 0);
 
     steps.forEach((step, i) => {
@@ -189,7 +209,6 @@ function MissionCanvasInner() {
       // ── Edges based on dependsOn ──
       const deps = getDeps(step);
       if (deps.length === 0) {
-        // Root node: edge from Mission
         allEdges.push({
           id: `e-mission-${step.id}`,
           source: 'mission',
@@ -228,7 +247,7 @@ function MissionCanvasInner() {
       }
     });
 
-    // ── Output node (right of the deepest level) ──
+    // ── Output node ──
     if (steps.length > 0) {
       const outputX = BASE_X + (maxDepth + 2) * SPACING_X;
       const outputStatus = status === 'complete' ? 'output' : 'pending';
@@ -248,8 +267,6 @@ function MissionCanvasInner() {
         },
       });
 
-      // Edges from leaf nodes → Output
-      // A leaf node is one that no other step depends on
       const leafSteps = steps.filter(s =>
         !steps.some(other => getDeps(other).includes(s.id))
       );
@@ -277,13 +294,11 @@ function MissionCanvasInner() {
   const [nodes, setNodes, onNodesChange] = useNodesState(rfNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(rfEdges);
 
-  // Sync ReactFlow state when pipeline state changes
   useEffect(() => {
     setNodes(rfNodes);
     setEdges(rfEdges);
   }, [rfNodes, rfEdges, setNodes, setEdges]);
 
-  // Auto-fit view when node count changes or output panel toggles
   useEffect(() => {
     if (rfNodes.length > 0) {
       const timer = setTimeout(() => fitView({ padding: 0.3, duration: 400 }), 200);
@@ -294,7 +309,13 @@ function MissionCanvasInner() {
   return (
     <div className="flex h-full bg-zinc-950">
       <div className="flex-1 flex flex-col min-w-0">
-        <StatusBar status={status} startedAt={startedAt} completedAt={completedAt} steps={steps} />
+        <StatusBar
+          status={status}
+          startedAt={startedAt}
+          completedAt={completedAt}
+          steps={steps}
+          onNewMission={handleNewMission}
+        />
         <div className="flex-1">
           <ReactFlow
             nodes={nodes}
@@ -318,7 +339,14 @@ function MissionCanvasInner() {
       </div>
 
       {showOutput && finalOutput && (
-        <OutputPanel output={finalOutput} onClose={() => setShowOutput(false)} />
+        <OutputPanel
+          output={finalOutput}
+          onClose={() => setShowOutput(false)}
+          onNewMission={handleNewMission}
+          steps={steps}
+          startedAt={startedAt}
+          completedAt={completedAt}
+        />
       )}
     </div>
   );
