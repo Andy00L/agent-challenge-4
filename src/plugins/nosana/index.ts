@@ -7,6 +7,7 @@ import { scaleReplicasAction } from './actions/scaleReplicas.js';
 import { stopDeploymentAction } from './actions/stopDeployment.js';
 import { fleetStatusProvider } from './providers/fleetStatusProvider.js';
 import { getNosanaManager } from './services/nosanaManager.js';
+import { getPipelineState, resetPipelineState } from './services/missionOrchestrator.js';
 
 export const nosanaPlugin: Plugin = {
   name: 'plugin-nosana',
@@ -87,6 +88,13 @@ export const nosanaPlugin: Plugin = {
       const manager = getNosanaManager();
       const credits = await manager.getCreditsBalance();
       res.json(credits || { balance: 0, currency: 'USD' });
+    });
+    app.get('/fleet/mission', (_req: any, res: any) => {
+      res.json(getPipelineState());
+    });
+    app.post('/fleet/mission/reset', (_req: any, res: any) => {
+      resetPipelineState();
+      res.json({ success: true });
     });
     app.get('/fleet/:id/activity', async (req: any, res: any) => {
       const manager = getNosanaManager();

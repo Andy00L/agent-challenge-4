@@ -1,1 +1,51 @@
 @import "tailwindcss";
+
+/* Node animations */
+@keyframes node-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+@keyframes node-glow {
+  0%, 100% { box-shadow: 0 0 15px 0 rgba(59, 130, 246, 0.3); }
+  50% { box-shadow: 0 0 25px 5px rgba(59, 130, 246, 0.5); }
+}
+
+@keyframes slide-in-right {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+.animate-slide-in-right {
+  animation: slide-in-right 0.3s ease-out forwards;
+}
+
+.animate-node-pulse {
+  animation: node-pulse 2s ease-in-out infinite;
+}
+
+.animate-node-glow {
+  animation: node-glow 2s ease-in-out infinite;
+}
+
+/* ReactFlow dark theme overrides */
+.react-flow__background {
+  background-color: #09090b !important;
+}
+
+.react-flow__controls {
+  background-color: #18181b !important;
+  border: 1px solid #27272a !important;
+  border-radius: 8px !important;
+}
+
+.react-flow__controls-button {
+  background-color: #18181b !important;
+  border-color: #27272a !important;
+  fill: #a1a1aa !important;
+}
+
+.react-flow__controls-button:hover {
+  background-color: #27272a !important;
+  fill: #e4e4e7 !important;
+}

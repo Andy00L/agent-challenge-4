@@ -24,6 +24,54 @@ export interface MissionResult {
   totalTime: number;
 }
 
+// ── Pipeline state exposed to REST endpoint ──────────────
+
+export interface MissionPipelineState {
+  id: string | null;
+  mission: string | null;
+  status: 'idle' | 'planning' | 'deploying' | 'executing' | 'complete' | 'error';
+  steps: Array<{
+    id: string;
+    name: string;
+    template: string;
+    task: string;
+    status: 'pending' | 'deploying' | 'deployed' | 'ready' | 'processing' | 'complete' | 'error' | 'stopped';
+    deploymentId?: string;
+    url?: string;
+    market?: string;
+    costPerHour?: number;
+    outputPreview?: string;
+    error?: string;
+    dependsOn?: string;
+  }>;
+  finalOutput: string | null;
+  startedAt: number | null;
+  completedAt: number | null;
+}
+
+let currentPipelineState: MissionPipelineState = {
+  id: null, mission: null, status: 'idle', steps: [],
+  finalOutput: null, startedAt: null, completedAt: null,
+};
+
+export function getPipelineState(): MissionPipelineState {
+  return currentPipelineState;
+}
+
+export function resetPipelineState(): void {
+  currentPipelineState = {
+    id: null, mission: null, status: 'idle', steps: [],
+    finalOutput: null, startedAt: null, completedAt: null,
+  };
+}
+
+function stepStatusForClient(node: PipelineNode): MissionPipelineState['steps'][number]['status'] {
+  if (node.status === 'deploying' && node.deploymentId) return 'deployed';
+  return node.status;
+}
+
+// ── Orchestrator ─────────────────────────────────────────
+
 export class MissionOrchestrator {
 
   async planPipeline(mission: string): Promise<PipelineStep[]> {
@@ -40,7 +88,7 @@ export class MissionOrchestrator {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${apiKey}`,
         },
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(60_000),
         body: JSON.stringify({
           model,
           messages: [
@@ -67,7 +115,6 @@ Example for "Research AI trends and write a blog post":
       const data = await res.json() as any;
       const content = data.choices?.[0]?.message?.content || '';
 
-      // Extract JSON array (may be wrapped in ```json ... ```)
       const jsonMatch = content.match(/\[[\s\S]*?\]/);
       if (!jsonMatch) throw new Error('No JSON array in LLM response');
 
@@ -88,21 +135,42 @@ Example for "Research AI trends and write a blog post":
     const steps: PipelineStep[] = [];
 
     if (lower.includes('research') || lower.includes('find') || lower.includes('latest') || lower.includes('trend') || lower.includes('search')) {
-      steps.push({ template: 'researcher', name: 'Researcher', task: `Research: ${mission}. Provide a detailed summary with key findings.` });
+      steps.push({
+        template: 'researcher',
+        name: 'Researcher',
+        task: `Research the following topic thoroughly. Gather key facts, recent developments, notable sources, and relevant data. Provide a well-structured summary with your findings: ${mission}`,
+      });
     }
 
     if (lower.includes('analy') || lower.includes('compare') || lower.includes('data')) {
-      steps.push({ template: 'analyst', name: 'Analyst', task: 'Analyze the findings and identify key trends, patterns, and insights.' });
+      steps.push({
+        template: 'analyst',
+        name: 'Analyst',
+        task: `Analyze the research findings. Identify key trends, patterns, comparisons, and actionable insights related to: ${mission}`,
+      });
     }
 
     if (lower.includes('write') || lower.includes('blog') || lower.includes('article') || lower.includes('content') || lower.includes('post')) {
-      steps.push({ template: 'writer', name: 'Writer', task: `Write a polished ${lower.includes('blog') ? 'blog post' : 'article'} based on the provided research.` });
+      const format = lower.includes('blog') ? 'blog post' : lower.includes('article') ? 'article' : 'written piece';
+      steps.push({
+        template: 'writer',
+        name: 'Writer',
+        task: `Using the research provided, write a polished, engaging ${format} with clear sections, compelling narrative, and a strong conclusion about: ${mission}`,
+      });
     }
 
     if (steps.length === 0) {
       steps.push(
-        { template: 'researcher', name: 'Researcher', task: `Research: ${mission}` },
-        { template: 'writer', name: 'Writer', task: 'Summarize the research findings clearly.' },
+        {
+          template: 'researcher',
+          name: 'Researcher',
+          task: `Thoroughly research the following topic. Gather key facts, recent developments, data points, and expert perspectives. Provide a comprehensive, well-structured summary: ${mission}`,
+        },
+        {
+          template: 'writer',
+          name: 'Writer',
+          task: `Using the research provided, synthesize the findings into a clear, well-organized report. Highlight the most important points and present actionable conclusions about: ${mission}`,
+        },
       );
     }
 
@@ -112,32 +180,69 @@ Example for "Research AI trends and write a blog post":
   async execute(mission: string, callback?: (text: string) => Promise<void>, originalMission?: string): Promise<MissionResult> {
     const startTime = Date.now();
     const log = (msg: string) => console.log(`[MissionOrchestrator] ${msg}`);
+    const missionId = `mission-${Date.now()}`;
+
+    // Init pipeline state
+    currentPipelineState = {
+      id: missionId, mission, status: 'planning', steps: [],
+      finalOutput: null, startedAt: startTime, completedAt: null,
+    };
 
     // 1. Plan
     log('Planning mission pipeline...');
     const steps = await this.planPipeline(mission);
     const nodes: PipelineNode[] = steps.map(s => ({ step: s, status: 'pending' as const }));
 
+    // State sync helper — call after every node status change
+    let marketName: string | undefined;
+    let marketCost: number | undefined;
+    const syncState = (pipelineStatus?: MissionPipelineState['status']) => {
+      currentPipelineState = {
+        ...currentPipelineState,
+        status: pipelineStatus || currentPipelineState.status,
+        steps: nodes.map((n, i) => ({
+          id: `step-${i}`,
+          name: n.step.name,
+          template: n.step.template,
+          task: n.step.task,
+          status: stepStatusForClient(n),
+          deploymentId: n.deploymentId,
+          url: n.url,
+          market: marketName,
+          costPerHour: marketCost,
+          outputPreview: n.output?.slice(0, 300),
+          error: n.error,
+          dependsOn: i > 0 ? `step-${i - 1}` : undefined,
+        })),
+      };
+    };
+
+    syncState('deploying');
+
     log(`pipeline:created — ${steps.length} steps: ${steps.map(s => s.template).join(' → ')}`);
     if (callback) {
       await callback(
         `**Mission planned!** ${steps.length} agents in pipeline:\n` +
         steps.map((s, i) => `${i + 1}. **${s.name}** (${s.template}) — ${s.task.slice(0, 100)}`).join('\n') +
-        '\n\nDeploying agents on Nosana...'
+        '\n\nStarting pipeline on Nosana...'
       );
     }
 
     const manager = getNosanaManager();
     const market = await manager.getBestMarket();
     if (!market) throw new Error('No GPU markets available');
+    marketName = market.name;
+    marketCost = market.pricePerHour;
 
     const workerImage = process.env.AGENTFORGE_WORKER_IMAGE || 'drewdockerus/agentforge-worker:latest';
 
-    // 2. Deploy all agents in parallel
-    const deployPromises = nodes.map(async (node) => {
+    // --- Helpers ---
+
+    const deployNode = async (node: PipelineNode) => {
       const tmpl = AGENT_TEMPLATES[node.step.template] || AGENT_TEMPLATES['researcher'];
       node.status = 'deploying';
       log(`node:status — ${node.step.name}: deploying`);
+      syncState();
 
       try {
         const dep = await manager.createAndStartDeployment({
@@ -163,56 +268,106 @@ Example for "Research AI trends and write a blog post":
         node.deploymentId = dep.id;
         node.url = dep.url;
         log(`node:status — ${node.step.name}: deployed (${dep.id})`);
+        syncState();
       } catch (err: any) {
         node.status = 'error';
         node.error = err.message;
-        log(`node:status — ${node.step.name}: error — ${err.message}`);
+        log(`node:status — ${node.step.name}: deploy error — ${err.message}`);
+        syncState();
       }
-    });
+    };
 
-    await Promise.all(deployPromises);
+    const waitForNodeReady = async (node: PipelineNode): Promise<boolean> => {
+      if (node.status === 'error' || !node.url) return false;
+      const client = new WorkerClient(node.url);
 
-    const failed = nodes.filter(n => n.status === 'error');
-    if (failed.length === nodes.length) {
-      throw new Error(`All deployments failed: ${failed.map(f => f.error).join('; ')}`);
-    }
-
-    if (callback) {
-      await callback(`${nodes.length - failed.length} agents deployed. Waiting for them to come online...`);
-    }
-
-    // 3. Wait for agents to be ready
-    for (const node of nodes) {
-      if (node.status === 'error' || !node.url) continue;
       try {
-        const client = new WorkerClient(node.url);
-        await client.waitForReady(180_000);
+        await client.waitForReady(240_000);
         node.status = 'ready';
         log(`node:status — ${node.step.name}: ready`);
+        syncState();
+        return true;
       } catch (err: any) {
-        node.status = 'error';
-        node.error = err.message;
-        log(`node:status — ${node.step.name}: error waiting — ${err.message}`);
+        log(`node:status — ${node.step.name}: waitForReady failed — ${err.message}, retrying...`);
       }
-    }
 
-    // 4. Execute pipeline sequentially
+      try {
+        await client.waitForReady(240_000);
+        node.status = 'ready';
+        log(`node:status — ${node.step.name}: ready (retry)`);
+        syncState();
+        return true;
+      } catch (err: any) {
+        log(`node:status — ${node.step.name}: retry also failed — ${err.message}`);
+        return false;
+      }
+    };
+
+    // 2. Pipeline overlap execution
     const missionText = originalMission || mission;
     let previousOutput = '';
     let lastSuccessfulStep = '';
     let finalOutput = '';
+    let backgroundDeploy: Promise<void> | null = null;
 
     for (let i = 0; i < nodes.length; i++) {
       const node = nodes[i];
+      const nextNode = i + 1 < nodes.length ? nodes[i + 1] : null;
 
-      if (node.status !== 'ready') {
-        // Step failed (deploy or readiness) — skip but don't lose context
-        log(`node:status — ${node.step.name}: skipped (${node.status}: ${node.error})`);
+      if (backgroundDeploy) {
+        await backgroundDeploy;
+        backgroundDeploy = null;
+      } else if (node.status === 'pending') {
+        await deployNode(node);
+      }
+
+      if (node.status === 'error' || !node.url) {
+        log(`node:status — ${node.step.name}: skipped (deploy failed: ${node.error})`);
+        if (nextNode && nextNode.status === 'pending') {
+          backgroundDeploy = deployNode(nextNode);
+        }
         continue;
       }
 
+      if (callback) {
+        await callback(`Agent ${node.step.name} deployed. Waiting for it to come online...`);
+      }
+
+      let ready = await waitForNodeReady(node);
+
+      if (!ready && node.url) {
+        if (nextNode && nextNode.status === 'pending') {
+          backgroundDeploy = deployNode(nextNode);
+        }
+
+        try {
+          const client = new WorkerClient(node.url);
+          await client.waitForReady(60_000);
+          node.status = 'ready';
+          ready = true;
+          log(`node:status — ${node.step.name}: ready (late)`);
+          syncState();
+        } catch {
+          node.status = 'error';
+          node.error = 'Not ready after extended wait';
+          log(`node:status — ${node.step.name}: giving up after extended wait`);
+          syncState();
+        }
+      }
+
+      if (!ready) {
+        continue;
+      }
+
+      if (nextNode && nextNode.status === 'pending' && !backgroundDeploy) {
+        backgroundDeploy = deployNode(nextNode);
+      }
+
+      // --- Execute this step ---
+
       node.status = 'processing';
       log(`node:status — ${node.step.name}: processing`);
+      syncState('executing');
 
       if (callback) {
         await callback(`**Step ${i + 1}/${nodes.length}**: ${node.step.name} is working...`);
@@ -220,13 +375,11 @@ Example for "Research AI trends and write a blog post":
 
       let prompt: string;
       if (i === 0 || !previousOutput) {
-        // First step OR no previous output (prior steps failed)
         prompt = node.step.task;
       } else {
         prompt = `${node.step.task}\n\nHere is the output from the previous step:\n\n${previousOutput}`;
       }
 
-      // If prior steps failed, give this agent the original mission as fallback
       if (i > 0 && !previousOutput && lastSuccessfulStep === '') {
         prompt = `The previous agent (${nodes[i - 1]?.step.template || 'unknown'}) was unavailable. ` +
           `Please complete the mission using your own knowledge: ${missionText}`;
@@ -242,14 +395,28 @@ Example for "Research AI trends and write a blog post":
         lastSuccessfulStep = node.step.name;
         finalOutput = output;
         log(`node:status — ${node.step.name}: complete (${output.length} chars)`);
+        syncState();
       } catch (err: any) {
         node.status = 'error';
         node.error = err.message;
         log(`node:status — ${node.step.name}: error — ${err.message}`);
+        syncState();
       }
     }
 
-    // 5. Cleanup: stop all mission agents to save credits
+    // Check if all steps failed
+    if (nodes.every(n => n.status === 'error')) {
+      for (const node of nodes) {
+        if (node.deploymentId) {
+          try { await manager.stopDeployment(node.deploymentId); } catch {}
+        }
+      }
+      currentPipelineState = { ...currentPipelineState, status: 'error', completedAt: Date.now() };
+      syncState('error');
+      throw new Error(`All pipeline steps failed: ${nodes.map(n => `${n.step.name}: ${n.error}`).join('; ')}`);
+    }
+
+    // 3. Cleanup
     log('Cleaning up mission agents...');
     for (const node of nodes) {
       if (node.deploymentId) {
@@ -262,6 +429,14 @@ Example for "Research AI trends and write a blog post":
 
     const totalTime = Date.now() - startTime;
     log(`mission:complete — ${totalTime}ms, ${nodes.filter(n => n.status === 'complete').length}/${nodes.length} steps succeeded`);
+
+    currentPipelineState = {
+      ...currentPipelineState,
+      status: 'complete',
+      finalOutput: finalOutput || 'Mission produced no output.',
+      completedAt: Date.now(),
+    };
+    syncState('complete');
 
     return {
       success: nodes.some(n => n.status === 'complete'),
