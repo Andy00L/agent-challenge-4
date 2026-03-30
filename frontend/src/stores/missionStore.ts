@@ -44,17 +44,27 @@ export const useMissionStore = create<MissionState>((set, get) => ({
 
   updateFromServer: (data: any) => {
     if (!data) return;
-    // Don't overwrite active state with stale idle
-    if (data.status === 'idle' && get().status !== 'idle' && get().isActive) return;
+    const serverStatus: PipelineStatus = data.status ?? 'idle';
+    const localStatus = get().status;
+
+    if (serverStatus === 'idle') {
+      // Already idle — nothing to do
+      if (localStatus === 'idle') return;
+      // User viewing completed/errored results — preserve them
+      if (localStatus === 'complete' || localStatus === 'error') return;
+      // Active state (planning/deploying/executing) but backend says idle
+      // → backend was reset externally, sync local state
+    }
+
     set({
       pipelineId: data.id ?? null,
       mission: data.mission ?? null,
       steps: data.steps ?? [],
-      status: data.status ?? 'idle',
+      status: serverStatus,
       finalOutput: data.finalOutput ?? null,
       startedAt: data.startedAt ?? null,
       completedAt: data.completedAt ?? null,
-      isActive: !!data.status && data.status !== 'idle' && data.status !== 'complete' && data.status !== 'error',
+      isActive: serverStatus !== 'idle' && serverStatus !== 'complete' && serverStatus !== 'error',
     });
   },
 

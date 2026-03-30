@@ -1,10 +1,12 @@
-import { useMemo, useState, useCallback, useEffect } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import {
   ReactFlow,
+  ReactFlowProvider,
   Background,
   Controls,
   useNodesState,
   useEdgesState,
+  useReactFlow,
   type Node,
   type Edge,
   BackgroundVariant,
@@ -17,16 +19,28 @@ import { useMissionStore, type PipelineStep, type PipelineStatus } from '../../s
 
 const nodeTypes = { missionNode: MissionNode };
 
-function StatusBar({ status, startedAt, steps }: { status: PipelineStatus; startedAt: number | null; steps: PipelineStep[] }) {
+function StatusBar({ status, startedAt, completedAt, steps }: {
+  status: PipelineStatus;
+  startedAt: number | null;
+  completedAt: number | null;
+  steps: PipelineStep[];
+}) {
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
     if (!startedAt || status === 'idle') { setElapsed(0); return; }
+
+    const endTime = completedAt || (status === 'complete' || status === 'error' ? Date.now() : null);
+    if (endTime) {
+      setElapsed(Math.floor((endTime - startedAt) / 1000));
+      return;
+    }
+
     const tick = () => setElapsed(Math.floor((Date.now() - startedAt) / 1000));
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-  }, [startedAt, status]);
+  }, [startedAt, completedAt, status]);
 
   const completedCount = steps.filter(s => s.status === 'complete').length;
   const processingStep = steps.find(s => s.status === 'processing');
@@ -46,16 +60,17 @@ function StatusBar({ status, startedAt, steps }: { status: PipelineStatus; start
 
   const mins = Math.floor(elapsed / 60);
   const secs = elapsed % 60;
-  const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+  const timeStr = mins > 0 ? `${mins}m ${String(secs).padStart(2, '0')}s` : `${secs}s`;
+
+  const dotClass =
+    status === 'complete' ? 'bg-green-500' :
+    status === 'error' ? 'bg-red-500' :
+    'bg-blue-500 animate-pulse';
 
   return (
-    <div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-4 h-10 bg-zinc-900/80 backdrop-blur-sm border-b border-zinc-800 text-xs">
+    <div className="flex items-center justify-between px-4 h-10 bg-zinc-900/80 backdrop-blur-sm border-b border-zinc-800 text-xs shrink-0">
       <div className="flex items-center gap-3">
-        {(status === 'planning' || status === 'deploying' || status === 'executing') && (
-          <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-        )}
-        {status === 'complete' && <div className="w-2 h-2 rounded-full bg-green-500" />}
-        {status === 'error' && <div className="w-2 h-2 rounded-full bg-red-500" />}
+        <div className={`w-2 h-2 rounded-full ${dotClass}`} />
         <span className="text-zinc-300">{statusLabel}</span>
       </div>
       <div className="flex items-center gap-4 text-zinc-500">
@@ -79,9 +94,10 @@ function IdleState() {
   );
 }
 
-export function MissionCanvas() {
-  const { steps, status, mission, finalOutput, startedAt } = useMissionStore();
+function MissionCanvasInner() {
+  const { steps, status, mission, finalOutput, startedAt, completedAt } = useMissionStore();
   const [showOutput, setShowOutput] = useState(false);
+  const { fitView } = useReactFlow();
 
   // Auto-show output panel when mission completes
   useEffect(() => {
@@ -154,7 +170,8 @@ export function MissionCanvas() {
         animated: isTargetProcessing,
         style: {
           stroke: isError ? '#ef4444' : isTargetProcessing ? '#3b82f6' : isSourceComplete ? '#22c55e' : '#6366f1',
-          strokeWidth: 2,
+          strokeWidth: 3,
+          opacity: 0.8,
         },
       });
     });
@@ -187,7 +204,8 @@ export function MissionCanvas() {
         animated: lastStep.status === 'complete' && status !== 'complete',
         style: {
           stroke: status === 'complete' ? '#22c55e' : lastStep.status === 'complete' ? '#3b82f6' : '#6366f1',
-          strokeWidth: 2,
+          strokeWidth: 3,
+          opacity: 0.8,
         },
       });
     }
@@ -204,14 +222,49 @@ export function MissionCanvas() {
     setEdges(rfEdges);
   }, [rfNodes, rfEdges, setNodes, setEdges]);
 
-  const onInit = useCallback((instance: any) => {
-    setTimeout(() => instance.fitView({ padding: 0.3 }), 100);
-  }, []);
-
-  // Re-fit when nodes change
+  // Auto-fit view when node count changes or output panel toggles
   useEffect(() => {
-    // fitView triggered by node count changes - handled by key remount below
-  }, [nodes.length]);
+    if (rfNodes.length > 0) {
+      const timer = setTimeout(() => fitView({ padding: 0.3, duration: 400 }), 200);
+      return () => clearTimeout(timer);
+    }
+  }, [rfNodes.length, showOutput, fitView]);
+
+  return (
+    <div className="flex h-full bg-zinc-950">
+      <div className="flex-1 flex flex-col min-w-0">
+        <StatusBar status={status} startedAt={startedAt} completedAt={completedAt} steps={steps} />
+        <div className="flex-1">
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            nodeTypes={nodeTypes}
+            fitView
+            fitViewOptions={{ padding: 0.3 }}
+            proOptions={{ hideAttribution: true }}
+            nodesDraggable={false}
+            nodesConnectable={false}
+            elementsSelectable={false}
+            minZoom={0.3}
+            maxZoom={1.5}
+          >
+            <Background variant={BackgroundVariant.Dots} color="#333" gap={20} />
+            <Controls position="bottom-left" />
+          </ReactFlow>
+        </div>
+      </div>
+
+      {showOutput && finalOutput && (
+        <OutputPanel output={finalOutput} onClose={() => setShowOutput(false)} />
+      )}
+    </div>
+  );
+}
+
+export function MissionCanvas() {
+  const status = useMissionStore(s => s.status);
 
   if (status === 'idle') {
     return (
@@ -222,35 +275,8 @@ export function MissionCanvas() {
   }
 
   return (
-    <div className="relative h-full bg-zinc-950">
-      <StatusBar status={status} startedAt={startedAt} steps={steps} />
-
-      <div className="h-full pt-10">
-        <ReactFlow
-          key={`flow-${steps.length}`}
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          nodeTypes={nodeTypes}
-          onInit={onInit}
-          fitView
-          fitViewOptions={{ padding: 0.3 }}
-          proOptions={{ hideAttribution: true }}
-          nodesDraggable={false}
-          nodesConnectable={false}
-          elementsSelectable={false}
-          minZoom={0.3}
-          maxZoom={1.5}
-        >
-          <Background variant={BackgroundVariant.Dots} color="#333" gap={20} />
-          <Controls position="bottom-left" />
-        </ReactFlow>
-      </div>
-
-      {showOutput && finalOutput && (
-        <OutputPanel output={finalOutput} onClose={() => setShowOutput(false)} />
-      )}
-    </div>
+    <ReactFlowProvider>
+      <MissionCanvasInner />
+    </ReactFlowProvider>
   );
 }

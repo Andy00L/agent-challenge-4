@@ -1,5 +1,6 @@
 // REST client for communicating with deployed worker agents via their Nosana URLs
 // Uses the ElizaOS v2 HTTP API: dm-channel + POST /channels/:id/messages with transport:"http"
+// Fallback: polls channel messages if agentResponse is missing from the HTTP reply
 
 const ORCHESTRATOR_USER_ID = '11111111-1111-1111-1111-111111111111';
 const DEFAULT_SERVER_ID = '00000000-0000-0000-0000-000000000000';
@@ -32,8 +33,23 @@ export class WorkerClient {
     throw new Error(`Worker at ${this.baseUrl} not ready after ${timeoutMs / 1000}s`);
   }
 
-  async sendMessage(agentId: string, text: string): Promise<string> {
-    // Step 1: Get or create a DM channel with the worker agent
+  /** Get recent messages from a channel (ElizaOS returns { success, data: { messages } }). */
+  private async getChannelMessages(channelId: string, limit = 20): Promise<any[]> {
+    try {
+      const res = await fetch(
+        `${this.baseUrl}/api/messaging/channels/${channelId}/messages?limit=${limit}`,
+        { signal: AbortSignal.timeout(10_000) },
+      );
+      if (!res.ok) return [];
+      const data = await res.json() as any;
+      return data?.data?.messages || data?.messages || [];
+    } catch {
+      return [];
+    }
+  }
+
+  async sendMessage(agentId: string, text: string, timeoutMs = 180_000): Promise<string> {
+    // 1. Get or create DM channel
     const dmParams = new URLSearchParams({
       currentUserId: ORCHESTRATOR_USER_ID,
       targetUserId: agentId,
@@ -52,54 +68,86 @@ export class WorkerClient {
       throw new Error(`No channel ID in DM response: ${JSON.stringify(dmData).slice(0, 200)}`);
     }
 
+    // 2. Snapshot existing messages so we know what's "old"
+    const existingMessages = await this.getChannelMessages(channelId, 10);
+    const existingIds = new Set(existingMessages.map((m: any) => m.id));
+    console.log(`[WorkerClient] Channel ${channelId}: ${existingMessages.length} existing messages`);
+
+    // 3. Send message with transport:"http" (waits for agent processing)
     console.log(`[WorkerClient] Sending to ${this.baseUrl} channel=${channelId}`);
 
-    // Step 2: POST message to the channel with transport:"http" for synchronous response
-    const msgRes = await fetch(`${this.baseUrl}/api/messaging/channels/${channelId}/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(120_000),
-      body: JSON.stringify({
-        content: text,
-        author_id: ORCHESTRATOR_USER_ID,
-        message_server_id: DEFAULT_SERVER_ID,
-        source_type: 'orchestrator',
-        raw_message: { text },
-        transport: 'http',
-        metadata: {
-          isDm: true,
-          channelType: 'DM',
-          targetUserId: agentId,
-        },
-      }),
-    });
-
-    const rawBody = await msgRes.text();
-    console.log(`[WorkerClient] Response: status=${msgRes.status} body=${rawBody.slice(0, 300)}`);
-
-    if (!msgRes.ok) {
-      throw new Error(`Worker message failed: ${msgRes.status} ${rawBody.slice(0, 300)}`);
-    }
-
-    let data: any;
     try {
-      data = JSON.parse(rawBody);
-    } catch {
-      throw new Error(`Worker returned non-JSON: ${rawBody.slice(0, 300)}`);
+      const msgRes = await fetch(`${this.baseUrl}/api/messaging/channels/${channelId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(150_000),
+        body: JSON.stringify({
+          content: text,
+          author_id: ORCHESTRATOR_USER_ID,
+          message_server_id: DEFAULT_SERVER_ID,
+          source_type: 'orchestrator',
+          raw_message: { text },
+          transport: 'http',
+          metadata: { isDm: true, channelType: 'DM', targetUserId: agentId },
+        }),
+      });
+
+      const rawBody = await msgRes.text();
+      console.log(`[WorkerClient] HTTP response: status=${msgRes.status} body=${rawBody.slice(0, 500)}`);
+
+      if (msgRes.ok) {
+        try {
+          const data = JSON.parse(rawBody);
+          const ar = data.agentResponse;
+          if (ar) {
+            // agentResponse can be a string or an object — handle both
+            const responseText = typeof ar === 'string'
+              ? ar
+              : ar.text || ar.content?.text || JSON.stringify(ar);
+            if (responseText && responseText.length > 20 && responseText !== text) {
+              console.log(`[WorkerClient] Got agentResponse from HTTP (${responseText.length} chars)`);
+              return responseText;
+            }
+          }
+        } catch {}
+      }
+    } catch (err: any) {
+      console.log(`[WorkerClient] HTTP POST error: ${err.message} — will poll for response`);
     }
 
-    // handleHttpTransport returns: { success, userMessage, agentResponse }
-    // agentResponse is the content object from elizaOS.handleMessage()
-    const agentResponse = data.agentResponse;
-    if (agentResponse) {
-      return agentResponse.text || agentResponse.content?.text || JSON.stringify(agentResponse);
+    // 4. Fallback: poll channel messages for a new agent response
+    console.log('[WorkerClient] No usable agentResponse in HTTP reply, polling channel...');
+    const pollStart = Date.now();
+    const POLL_INTERVAL = 3_000;
+
+    while (Date.now() - pollStart < timeoutMs) {
+      await new Promise(r => setTimeout(r, POLL_INTERVAL));
+
+      const messages = await this.getChannelMessages(channelId, 20);
+      const newAgentMsgs = messages.filter((m: any) => {
+        if (existingIds.has(m.id)) return false;
+        if ((m.authorId || m.author_id) === ORCHESTRATOR_USER_ID) return false;
+        const content = typeof m.content === 'string' ? m.content : m.content?.text || '';
+        if (content.length < 20) return false;
+        if (content === text) return false;
+        return true;
+      });
+
+      if (newAgentMsgs.length > 0) {
+        const best = newAgentMsgs[newAgentMsgs.length - 1];
+        const responseText = typeof best.content === 'string'
+          ? best.content
+          : best.content?.text || JSON.stringify(best.content);
+        console.log(`[WorkerClient] Agent responded (poll, ${responseText.length} chars)`);
+        return responseText;
+      }
+
+      const elapsed = Math.floor((Date.now() - pollStart) / 1000);
+      if (elapsed % 15 === 0 && elapsed > 0) {
+        console.log(`[WorkerClient] Waiting for agent response... ${elapsed}s elapsed`);
+      }
     }
 
-    // Fallback: try other response shapes
-    if (data.text) return data.text;
-    if (data.content?.text) return data.content.text;
-    if (data.success && data.data?.text) return data.data.text;
-
-    return rawBody.slice(0, 2000) || 'Agent produced no text response.';
+    throw new Error(`Agent did not respond within ${Math.floor(timeoutMs / 1000)}s`);
   }
 }

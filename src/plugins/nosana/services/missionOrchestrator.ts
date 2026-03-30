@@ -329,10 +329,6 @@ Example for "Research AI trends and write a blog post":
         continue;
       }
 
-      if (callback) {
-        await callback(`Agent ${node.step.name} deployed. Waiting for it to come online...`);
-      }
-
       let ready = await waitForNodeReady(node);
 
       if (!ready && node.url) {
@@ -369,20 +365,43 @@ Example for "Research AI trends and write a blog post":
       log(`node:status — ${node.step.name}: processing`);
       syncState('executing');
 
-      if (callback) {
-        await callback(`**Step ${i + 1}/${nodes.length}**: ${node.step.name} is working...`);
-      }
-
       let prompt: string;
       if (i === 0 || !previousOutput) {
-        prompt = node.step.task;
+        prompt = [
+          'You are executing a task. Do NOT say "I\'ll do this" or "Let me help you." Provide your complete output IMMEDIATELY.',
+          '',
+          `TASK: ${node.step.task}`,
+          '',
+          'INSTRUCTIONS:',
+          '- Provide detailed, substantive content — not a plan or offer to help',
+          '- Include specific facts, examples, names, and details from your knowledge',
+          '- Write at least 300 words of actual content',
+          '- Do NOT ask clarifying questions — just execute with your best judgment',
+          '',
+          'PROVIDE YOUR COMPLETE OUTPUT NOW:',
+        ].join('\n');
       } else {
-        prompt = `${node.step.task}\n\nHere is the output from the previous step:\n\n${previousOutput}`;
+        prompt = [
+          'You are executing a task. The previous agent provided input below. Use it to complete your task.',
+          '',
+          '=== INPUT FROM PREVIOUS AGENT ===',
+          previousOutput,
+          '=== END INPUT ===',
+          '',
+          `TASK: ${node.step.task}`,
+          '',
+          'INSTRUCTIONS:',
+          '- Use ALL the information above as your source material',
+          '- Do NOT ask for more data — work with what you have',
+          '- Produce a complete, polished output ready for the end user',
+          '- Write at least 400 words of detailed content',
+          '',
+          'PRODUCE YOUR COMPLETE OUTPUT NOW:',
+        ].join('\n');
       }
 
       if (i > 0 && !previousOutput && lastSuccessfulStep === '') {
-        prompt = `The previous agent (${nodes[i - 1]?.step.template || 'unknown'}) was unavailable. ` +
-          `Please complete the mission using your own knowledge: ${missionText}`;
+        prompt = `The previous agent was unavailable. Complete this mission using your own knowledge.\n\nMISSION: ${missionText}\nTASK: ${node.step.task}\n\nProvide a complete, detailed response. Execute the task NOW:`;
       }
 
       try {
