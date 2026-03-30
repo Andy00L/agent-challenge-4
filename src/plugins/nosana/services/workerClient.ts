@@ -65,7 +65,7 @@ export class WorkerClient {
    * Both kept intentionally — Strategy 1 is fast (~50% success with Qwen3.5),
    * Strategy 2 is the reliable catch-all.
    */
-  async sendMessage(agentId: string, text: string, timeoutMs = 300_000): Promise<string> {
+  async sendMessage(agentId: string, text: string, timeoutMs = 300_000, checkAlive?: () => boolean): Promise<string> {
     // 1. Get or create DM channel
     const dmParams = new URLSearchParams({
       currentUserId: ORCHESTRATOR_USER_ID,
@@ -112,6 +112,44 @@ export class WorkerClient {
       const rawBody = await msgRes.text();
       console.log(`[WorkerClient] HTTP response: status=${msgRes.status} body=${rawBody.slice(0, 500)}`);
 
+      // Handle 503 (Service Initializing) — wait and retry once
+      if (msgRes.status === 503) {
+        console.log('[WorkerClient] HTTP 503 — service initializing, retrying in 10s...');
+        await new Promise(r => setTimeout(r, 10_000));
+        try {
+          const retryRes = await fetch(`${this.baseUrl}/api/messaging/channels/${channelId}/messages`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            signal: AbortSignal.timeout(300_000),
+            body: JSON.stringify({
+              content: text,
+              author_id: ORCHESTRATOR_USER_ID,
+              message_server_id: DEFAULT_SERVER_ID,
+              source_type: 'orchestrator',
+              raw_message: { text },
+              transport: 'http',
+              metadata: { isDm: true, channelType: 'DM', targetUserId: agentId },
+            }),
+          });
+          if (retryRes.ok) {
+            const retryBody = await retryRes.text();
+            try {
+              const retryData = JSON.parse(retryBody);
+              const ar = retryData.agentResponse;
+              if (ar) {
+                const responseText = typeof ar === 'string' ? ar : ar.text || ar.content?.text || JSON.stringify(ar);
+                if (responseText && responseText.length > 20 && responseText !== text) {
+                  console.log(`[WorkerClient] Got agentResponse from 503 retry (${responseText.length} chars)`);
+                  return responseText;
+                }
+              }
+            } catch {}
+          }
+        } catch (retryErr: any) {
+          console.log(`[WorkerClient] 503 retry also failed: ${retryErr.message}`);
+        }
+      }
+
       if (msgRes.ok) {
         try {
           const data = JSON.parse(rawBody);
@@ -138,6 +176,11 @@ export class WorkerClient {
     const POLL_INTERVAL = 3_000;
 
     while (Date.now() - pollStart < timeoutMs) {
+      // Check if the deployment is still alive before waiting
+      if (checkAlive && !checkAlive()) {
+        throw new Error('Deployment stopped or crashed during execution');
+      }
+
       await new Promise(r => setTimeout(r, POLL_INTERVAL));
 
       const messages = await this.getChannelMessages(channelId, 20);

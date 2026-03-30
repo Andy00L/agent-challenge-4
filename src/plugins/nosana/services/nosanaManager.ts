@@ -298,9 +298,14 @@ export class NosanaManager {
       try {
         const deployment = await this.client.api.deployments.get(deploymentId);
         await deployment.stop();
-      } catch (error) {
-        console.error(`[NosanaManager] Stop failed for ${deploymentId}:`, error);
-        throw error;
+      } catch (error: any) {
+        const msg = error?.message || String(error);
+        if (msg.includes('already stopped') || msg.includes('not running') || msg.includes('not found')) {
+          console.log(`[NosanaManager] ${record.name} (${deploymentId}): already stopped, skipping`);
+        } else {
+          console.error(`[NosanaManager] Stop failed for ${deploymentId}:`, error);
+          throw error;
+        }
       }
     }
 

@@ -86,10 +86,27 @@ export function ChatPanel() {
   const inputRef = useRef<HTMLInputElement>(null);
   const missionStatus = useMissionStore(s => s.status);
   const isMissionActive = missionStatus === 'deploying' || missionStatus === 'executing' || missionStatus === 'planning';
+  const [history, setHistory] = useState<any[]>([]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isMissionActive]);
+
+  // Poll mission history
+  useEffect(() => {
+    const fetchHistory = async () => {
+      try {
+        const res = await fetch('/fleet/mission/history');
+        if (!res.ok) return;
+        const ct = res.headers.get('content-type') ?? '';
+        if (!ct.includes('application/json')) return;
+        setHistory(await res.json());
+      } catch {}
+    };
+    fetchHistory();
+    const id = setInterval(fetchHistory, 10_000);
+    return () => clearInterval(id);
+  }, []);
 
   // Connect to agent on mount
   useEffect(() => {
@@ -205,6 +222,33 @@ export function ChatPanel() {
           <div className="text-xs text-zinc-500">{statusLabel}</div>
         </div>
       </div>
+
+      {/* Mission History */}
+      {history.length > 0 && (
+        <div className="px-4 py-2 border-b border-zinc-800">
+          <div className="text-[11px] font-medium text-zinc-600 uppercase tracking-wider mb-1">Recent Missions</div>
+          <div className="space-y-0.5 max-h-28 overflow-y-auto">
+            {history.slice(0, 5).map((h: any) => (
+              <button
+                key={h.id}
+                onClick={() => handleSend(h.mission)}
+                className="w-full text-left px-2 py-1 rounded hover:bg-zinc-800/50 transition-colors group flex items-center justify-between"
+              >
+                <span className="text-xs text-zinc-400 group-hover:text-zinc-200 truncate flex-1 mr-2">
+                  {h.mission?.slice(0, 45)}{h.mission?.length > 45 ? '...' : ''}
+                </span>
+                <div className="flex items-center gap-2 shrink-0 text-[11px] text-zinc-600">
+                  <span>{h.stepsCount}x</span>
+                  <span>{Math.round((h.totalTime || 0) / 1000)}s</span>
+                  <span className={h.status === 'complete' ? 'text-green-500' : 'text-red-500'}>
+                    {h.status === 'complete' ? '\u2713' : '\u2717'}
+                  </span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">

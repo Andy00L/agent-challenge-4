@@ -524,7 +524,12 @@ Example parallel: "Research AI, write a blog post AND a YouTube script"
       try {
         const client = new WorkerClient(node.url!);
         const agentId = await client.waitForReady(10_000);
-        const output = await client.sendMessage(agentId, prompt);
+        const checkAlive = () => {
+          if (!node.deploymentId) return true;
+          const dep = manager.getDeployment(node.deploymentId);
+          return !!dep && dep.status !== 'stopped' && dep.status !== 'error';
+        };
+        const output = await client.sendMessage(agentId, prompt, 300_000, checkAlive);
         node.output = output;
         node.status = 'complete';
         log(`node:status — ${node.step.name}: complete (${output.length} chars)`);
