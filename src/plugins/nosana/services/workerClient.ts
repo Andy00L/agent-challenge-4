@@ -49,6 +49,65 @@ export class WorkerClient {
   }
 
   /**
+   * After receiving an initial response from a researcher agent, poll for a
+   * web-enriched follow-up response (the REPLY → WEB_SEARCH → REPLY pattern).
+   * Returns the longest response found, which is typically the web-enriched one.
+   */
+  private async waitForEnrichedResponse(
+    channelId: string,
+    existingIds: Set<string>,
+    initialResponse: string,
+    inputText: string,
+    checkAlive?: () => boolean,
+  ): Promise<string> {
+    console.log('[WorkerClient] Researcher mode: waiting up to 90s for web-enriched response...');
+    let bestResponse = initialResponse;
+    const enrichStart = Date.now();
+    const ENRICH_TIMEOUT = 90_000;
+
+    while (Date.now() - enrichStart < ENRICH_TIMEOUT) {
+      if (checkAlive && !checkAlive()) {
+        console.log('[WorkerClient] Deployment stopped during enrichment wait, using current best');
+        break;
+      }
+
+      await new Promise(r => setTimeout(r, 5_000));
+
+      try {
+        const msgs = await this.getChannelMessages(channelId, 30);
+        for (const m of msgs) {
+          if (existingIds.has(m.id)) continue;
+          if ((m.authorId || m.author_id) === ORCHESTRATOR_USER_ID) continue;
+          const c = typeof m.content === 'string' ? m.content : m.content?.text || '';
+          if (c.length > bestResponse.length && c !== inputText) {
+            console.log(`[WorkerClient] Found enriched response (${c.length} > ${bestResponse.length} chars)`);
+            bestResponse = c;
+          }
+        }
+      } catch {}
+
+      // If we found something better after waiting 30s, that's good enough
+      if (bestResponse.length > initialResponse.length && Date.now() - enrichStart > 30_000) {
+        console.log('[WorkerClient] Enriched response confirmed after 30s, proceeding');
+        break;
+      }
+
+      const elapsed = Math.floor((Date.now() - enrichStart) / 1000);
+      if (elapsed % 15 === 0 && elapsed > 0) {
+        console.log(`[WorkerClient] Enrichment wait: ${elapsed}s (best: ${bestResponse.length} chars)`);
+      }
+    }
+
+    if (bestResponse.length > initialResponse.length) {
+      console.log(`[WorkerClient] Using web-enriched response (${bestResponse.length} chars, +${bestResponse.length - initialResponse.length} from web)`);
+    } else {
+      console.log(`[WorkerClient] No enriched response found, using initial (${initialResponse.length} chars)`);
+    }
+
+    return bestResponse;
+  }
+
+  /**
    * Send a message to the worker agent and wait for its response.
    *
    * DUAL STRATEGY (by design):
@@ -64,8 +123,17 @@ export class WorkerClient {
    *
    * Both kept intentionally — Strategy 1 is fast (~50% success with Qwen3.5),
    * Strategy 2 is the reliable catch-all.
+   *
+   * @param waitForEnrichment When true (researchers), after getting the first response,
+   *   wait up to 90s for a web-enriched follow-up (REPLY → WEB_SEARCH → REPLY pattern).
    */
-  async sendMessage(agentId: string, text: string, timeoutMs = 300_000, checkAlive?: () => boolean): Promise<string> {
+  async sendMessage(
+    agentId: string,
+    text: string,
+    timeoutMs = 300_000,
+    checkAlive?: () => boolean,
+    waitForEnrichment = false,
+  ): Promise<string> {
     // 1. Get or create DM channel
     const dmParams = new URLSearchParams({
       currentUserId: ORCHESTRATOR_USER_ID,
@@ -93,20 +161,22 @@ export class WorkerClient {
     // 3. Send message with transport:"http" (waits for agent processing)
     console.log(`[WorkerClient] Sending to ${this.baseUrl} channel=${channelId}`);
 
+    const postBody = JSON.stringify({
+      content: text,
+      author_id: ORCHESTRATOR_USER_ID,
+      message_server_id: DEFAULT_SERVER_ID,
+      source_type: 'orchestrator',
+      raw_message: { text },
+      transport: 'http',
+      metadata: { isDm: true, channelType: 'DM', targetUserId: agentId },
+    });
+
     try {
       const msgRes = await fetch(`${this.baseUrl}/api/messaging/channels/${channelId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: AbortSignal.timeout(300_000),
-        body: JSON.stringify({
-          content: text,
-          author_id: ORCHESTRATOR_USER_ID,
-          message_server_id: DEFAULT_SERVER_ID,
-          source_type: 'orchestrator',
-          raw_message: { text },
-          transport: 'http',
-          metadata: { isDm: true, channelType: 'DM', targetUserId: agentId },
-        }),
+        body: postBody,
       });
 
       const rawBody = await msgRes.text();
@@ -121,15 +191,7 @@ export class WorkerClient {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             signal: AbortSignal.timeout(300_000),
-            body: JSON.stringify({
-              content: text,
-              author_id: ORCHESTRATOR_USER_ID,
-              message_server_id: DEFAULT_SERVER_ID,
-              source_type: 'orchestrator',
-              raw_message: { text },
-              transport: 'http',
-              metadata: { isDm: true, channelType: 'DM', targetUserId: agentId },
-            }),
+            body: postBody,
           });
           if (retryRes.ok) {
             const retryBody = await retryRes.text();
@@ -140,6 +202,9 @@ export class WorkerClient {
                 const responseText = typeof ar === 'string' ? ar : ar.text || ar.content?.text || JSON.stringify(ar);
                 if (responseText && responseText.length > 20 && responseText !== text) {
                   console.log(`[WorkerClient] Got agentResponse from 503 retry (${responseText.length} chars)`);
+                  if (waitForEnrichment) {
+                    return this.waitForEnrichedResponse(channelId, existingIds, responseText, text, checkAlive);
+                  }
                   return responseText;
                 }
               }
@@ -161,6 +226,9 @@ export class WorkerClient {
               : ar.text || ar.content?.text || JSON.stringify(ar);
             if (responseText && responseText.length > 20 && responseText !== text) {
               console.log(`[WorkerClient] Got agentResponse from HTTP (${responseText.length} chars)`);
+              if (waitForEnrichment) {
+                return this.waitForEnrichedResponse(channelId, existingIds, responseText, text, checkAlive);
+              }
               return responseText;
             }
           }
@@ -199,6 +267,9 @@ export class WorkerClient {
           ? best.content
           : best.content?.text || JSON.stringify(best.content);
         console.log(`[WorkerClient] Agent responded (poll, ${responseText.length} chars)`);
+        if (waitForEnrichment) {
+          return this.waitForEnrichedResponse(channelId, existingIds, responseText, text, checkAlive);
+        }
         return responseText;
       }
 

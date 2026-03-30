@@ -146,7 +146,27 @@ function stepStatusForClient(node: PipelineNode): MissionPipelineState['steps'][
 
 // ── Prompts ──────────────────────────────────────────────
 
-function buildRootPrompt(task: string): string {
+function buildRootPrompt(task: string, mission?: string, template?: string): string {
+  if (template === 'researcher') {
+    return [
+      'You are a RESEARCH agent with web search capabilities. Your PRIMARY JOB is to search the web for current information.',
+      '',
+      `TASK: ${task}`,
+      '',
+      'CRITICAL INSTRUCTIONS:',
+      '1. FIRST, use your WEB_SEARCH action to find real, current information about this topic',
+      '2. Search for at least 2-3 different queries to get comprehensive results',
+      '3. AFTER searching, compile ALL your findings into a structured research report',
+      '4. Include specific facts, dates, statistics, company names, and URLs from your search results',
+      '5. Do NOT provide a response based only on your training data — the user needs CURRENT web information',
+      '6. Your output will be passed to other agents who will use it to create content',
+      '',
+      mission ? `ORIGINAL MISSION: ${mission}` : '',
+      '',
+      'SEARCH THE WEB FIRST, THEN PROVIDE YOUR RESEARCH FINDINGS:',
+    ].filter(Boolean).join('\n');
+  }
+
   return [
     'You are executing a task. Do NOT say "I\'ll do this" or "Let me help you." Provide your complete output IMMEDIATELY.',
     '',
@@ -227,29 +247,18 @@ export class MissionOrchestrator {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${apiKey}`,
         },
-        signal: AbortSignal.timeout(60_000),
+        signal: AbortSignal.timeout(120_000),
         body: JSON.stringify({
           model,
           messages: [
             {
               role: 'system',
-              content: `You are a mission planner for AgentForge. Given a user mission, plan a pipeline of AI agents.
-Available templates: researcher (web search + analysis), writer (content creation), monitor (tracking changes), publisher (social media), analyst (data analysis).
-Return ONLY a JSON array of steps. Each step: {"template":"...","name":"...","task":"...","dependsOn":...}
-Rules for dependsOn:
-- dependsOn: -1 means root node (takes the original mission as input)
-- dependsOn: 0 means depends on step at index 0 (sequential)
-- dependsOn: [1, 2] means depends on BOTH step 1 AND step 2 (merge node)
-- Multiple steps with the same dependsOn run IN PARALLEL on separate GPUs
-Rules:
-- Use 2-5 agents maximum
-- First agent(s) are usually researchers (dependsOn: -1)
-- If multiple independent outputs are requested (e.g. "blog post AND script"), use parallel branches
-- A merge step can combine parallel branches with dependsOn: [idx1, idx2]
-Example sequential: "Research AI trends and write a blog post"
-[{"template":"researcher","name":"AI-Researcher","task":"Research the latest AI trends with specific examples","dependsOn":-1},{"template":"writer","name":"Blog-Writer","task":"Write an engaging blog post from the research","dependsOn":0}]
-Example parallel: "Research AI, write a blog post AND a YouTube script"
-[{"template":"researcher","name":"AI-Researcher","task":"Research latest AI trends","dependsOn":-1},{"template":"writer","name":"Blog-Writer","task":"Write a blog post from the research","dependsOn":0},{"template":"writer","name":"Script-Writer","task":"Write a YouTube script from the research","dependsOn":0},{"template":"analyst","name":"Final-Editor","task":"Review and combine both outputs into a summary","dependsOn":[1,2]}]`,
+              content: `You are a pipeline planner. Output a JSON array of agents needed.
+Templates: researcher (web search), analyst (analysis), writer (content), publisher (social media)
+Rules: dependsOn:-1=first step, dependsOn:0=depends on step 0, dependsOn:[1,2]=depends on both. Multiple steps with same dependsOn run in PARALLEL. Max 5 steps.
+Example: "Research X and write a blog post AND YouTube script"
+[{"template":"researcher","name":"Researcher","task":"Research X thoroughly","dependsOn":-1},{"template":"writer","name":"Blog-Writer","task":"Write blog post","dependsOn":0},{"template":"writer","name":"Script-Writer","task":"Write YouTube script","dependsOn":0},{"template":"analyst","name":"Editor","task":"Review and merge outputs","dependsOn":[1,2]}]
+JSON array only, no markdown:`,
             },
             { role: 'user', content: mission },
           ],
@@ -504,7 +513,7 @@ Example parallel: "Research AI, write a blog post AND a YouTube script"
       let prompt: string;
 
       if (deps.length === 0) {
-        prompt = buildRootPrompt(node.step.task);
+        prompt = buildRootPrompt(node.step.task, missionText, node.step.template);
       } else if (deps.length === 1) {
         const parent = nodes.find(n => n.step.id === deps[0]);
         prompt = parent?.output
@@ -529,7 +538,8 @@ Example parallel: "Research AI, write a blog post AND a YouTube script"
           const dep = manager.getDeployment(node.deploymentId);
           return !!dep && dep.status !== 'stopped' && dep.status !== 'error';
         };
-        const output = await client.sendMessage(agentId, prompt, 300_000, checkAlive);
+        const isResearcher = node.step.template === 'researcher';
+        const output = await client.sendMessage(agentId, prompt, 300_000, checkAlive, isResearcher);
         node.output = output;
         node.status = 'complete';
         log(`node:status — ${node.step.name}: complete (${output.length} chars)`);
