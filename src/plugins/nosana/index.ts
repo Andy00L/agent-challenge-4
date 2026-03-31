@@ -8,6 +8,9 @@ import { stopDeploymentAction } from './actions/stopDeployment.js';
 import { fleetStatusProvider } from './providers/fleetStatusProvider.js';
 import { getNosanaManager } from './services/nosanaManager.js';
 import { getPipelineState, resetPipelineState, getMissionHistory, MissionOrchestrator } from './services/missionOrchestrator.js';
+import { missionQualityEvaluator } from './evaluators/missionQualityEvaluator.js';
+import { actionEventHandlers, getActionMetrics } from './events/actionMetrics.js';
+import { nosanaPluginTests } from './tests/pluginTests.js';
 
 export const nosanaPlugin: Plugin = {
   name: 'plugin-nosana',
@@ -23,11 +26,14 @@ export const nosanaPlugin: Plugin = {
   providers: [
     fleetStatusProvider,
   ],
+  evaluators: [missionQualityEvaluator],
+  events: actionEventHandlers,
+  tests: [nosanaPluginTests],
   routes: [
     {
       type: 'GET',
       path: '/fleet',
-      handler: async (req, res, runtime) => {
+      handler: async (_req, res, _runtime) => {
         const manager = getNosanaManager();
         const status = await manager.getFleetStatus();
         res.json(status);
@@ -36,7 +42,7 @@ export const nosanaPlugin: Plugin = {
     {
       type: 'GET',
       path: '/fleet/:id',
-      handler: async (req, res, runtime) => {
+      handler: async (req, res, _runtime) => {
         const id = req.params?.id;
         if (!id) {
           res.status(400).json({ error: 'Missing deployment ID' });
@@ -55,17 +61,17 @@ export const nosanaPlugin: Plugin = {
   init: async (_config: Record<string, string>, _runtime: any) => {
     const apiKey = process.env.NOSANA_API_KEY || '';
     const manager = getNosanaManager(apiKey);
-    console.log('[plugin-nosana] Nosana plugin initialized', apiKey ? '(API key set)' : '(mock mode)');
+    console.log('[AgentForge:Plugin] Nosana plugin initialized', apiKey ? '(API key set)' : '(mock mode)');
 
     if (apiKey && apiKey !== 'YOUR_NOSANA_API_KEY') {
       try {
         const markets = await manager.getMarkets();
-        console.log('[plugin-nosana] Available GPU markets:');
-        markets.forEach(m => console.log(`  ${m.name} (${m.gpu}): ${m.address} — $${m.pricePerHour}/hr`));
+        console.log('[AgentForge:Plugin] Available GPU markets:');
+        markets.forEach(m => console.log(`[AgentForge:Plugin]   ${m.name} (${m.gpu}): ${m.address} — $${m.pricePerHour}/hr`));
       } catch {}
       try {
         const creds = await manager.getCreditsBalance();
-        if (creds) console.log(`[plugin-nosana] Credits available: $${creds.balance.toFixed(2)}`);
+        if (creds) console.log(`[AgentForge:Plugin] Credits available: $${creds.balance.toFixed(2)}`);
       } catch {}
     }
 
@@ -100,6 +106,41 @@ export const nosanaPlugin: Plugin = {
     app.get('/fleet/mission/history', (_req: any, res: any) => {
       res.json(getMissionHistory());
     });
+    app.get('/fleet/mission/export', (_req: any, res: any) => {
+      const state = getPipelineState();
+      if (!state || state.status === 'idle') {
+        res.status(404).json({ error: 'No active or completed mission to export' });
+        return;
+      }
+      const stepsArr = state.steps || [];
+      res.json({
+        _format: 'agentforge-pipeline-v1',
+        _exported: new Date().toISOString(),
+        _description: 'AgentForge pipeline configuration. Re-run via POST /fleet/mission/execute.',
+        mission: state.mission,
+        pipeline: {
+          id: state.id,
+          status: state.status,
+          startedAt: state.startedAt,
+          completedAt: state.completedAt,
+          steps: stepsArr.map((s: any) => ({
+            id: s.id, template: s.template, name: s.name, task: s.task,
+            dependsOn: s.dependsOn, status: s.status,
+            market: s.market, costPerHour: s.costPerHour,
+            outputPreview: s.output?.slice(0, 200),
+          })),
+        },
+        dag: {
+          totalSteps: stepsArr.length,
+          depthLevels: Math.max(...stepsArr.map((s: any) => (s.depth ?? 0)), 0) + 1,
+          maxParallel: Math.max(...stepsArr.map((s: any) => (s.parallelCount ?? 1)), 1),
+        },
+        nosana: {
+          gpuMarketsUsed: [...new Set(stepsArr.map((s: any) => s.market).filter(Boolean))],
+          estimatedCostPerRun: stepsArr.reduce((sum: number, s: any) => sum + ((s.costPerHour || 0) * 0.1), 0),
+        },
+      });
+    });
     app.post('/fleet/mission/execute', async (req: any, res: any) => {
       const { mission } = req.body || {};
       if (!mission) { res.status(400).json({ error: 'Missing mission in body' }); return; }
@@ -110,7 +151,10 @@ export const nosanaPlugin: Plugin = {
       }
       resetPipelineState();
       res.json({ success: true, message: 'Mission started. Poll /fleet/mission for status.' });
-      new MissionOrchestrator().execute(mission).catch((e: any) => console.error('[API] Mission failed:', e.message));
+      new MissionOrchestrator().execute(mission).catch((e: any) => console.error('[AgentForge:FleetAPI] Mission failed:', e.message));
+    });
+    app.get('/fleet/metrics', (_req: any, res: any) => {
+      res.json(getActionMetrics());
     });
     app.get('/fleet/api-docs', (_req: any, res: any) => {
       res.json({
@@ -185,9 +229,34 @@ export const nosanaPlugin: Plugin = {
       res.json(dep);
     });
     const port = parseInt(process.env.FLEET_API_PORT || '3001');
-    app.listen(port, '127.0.0.1', () => {
-      console.log(`[FleetAPI] Running on http://127.0.0.1:${port}`);
+    const server = app.listen(port, '0.0.0.0', () => {
+      console.log(`[AgentForge:FleetAPI] Fleet API running on http://0.0.0.0:${port}`);
     });
+    server.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') {
+        console.warn(`[AgentForge:FleetAPI] Port ${port} already in use — Fleet API will use ElizaOS plugin routes instead`);
+      } else {
+        console.error(`[AgentForge:FleetAPI] Failed to start Fleet API:`, err.message);
+      }
+    });
+
+    // Test embedding availability at boot (log once)
+    try {
+      const baseUrl = process.env.OPENAI_BASE_URL || process.env.OPENAI_API_URL || '';
+      if (baseUrl) {
+        const res = await fetch(`${baseUrl}/embeddings`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.OPENAI_API_KEY || 'nosana'}` },
+          body: JSON.stringify({ input: 'test', model: process.env.OPENAI_SMALL_MODEL || 'Qwen3.5-27B-AWQ-4bit' }),
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!res.ok) {
+          console.warn(`[AgentForge:Embedding] Embedding endpoint returned ${res.status} — semantic memory disabled, using zero-vector fallback`);
+        }
+      }
+    } catch {
+      console.warn('[AgentForge:Embedding] Embedding endpoint unreachable — semantic memory disabled');
+    }
   },
 };
 

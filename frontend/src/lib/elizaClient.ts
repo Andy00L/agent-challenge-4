@@ -58,15 +58,6 @@ export async function getOrCreateDmChannel(agentId: string): Promise<string> {
   return channelId;
 }
 
-export async function getMessages(channelId: string, limit = 50): Promise<ChannelMessage[]> {
-  const res = await fetch(
-    `${API_BASE}/messaging/channels/${channelId}/messages?limit=${limit}`,
-  );
-  if (!res.ok) return [];
-  const json = await res.json();
-  return json?.data?.messages ?? [];
-}
-
 // ── Socket.IO ────────────────────────────────────────
 
 let socket: Socket | null = null;

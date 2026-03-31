@@ -13,10 +13,10 @@ export async function pollFleetOnce(): Promise<void> {
 
   try {
     const res = await fetch(`/fleet?agentId=${_agentId}`);
-    if (!res.ok) return; // Plugin route not mounted — skip silently
+    if (!res.ok) return;
 
     const contentType = res.headers.get('content-type') ?? '';
-    if (!contentType.includes('application/json')) return; // Got HTML fallback — skip
+    if (!contentType.includes('application/json')) return;
 
     const data = await res.json();
     useFleetStore.getState().setDeployments(data.deployments || []);
@@ -39,9 +39,35 @@ async function pollCredits(): Promise<void> {
   }
 }
 
-export function startFleetPolling(): ReturnType<typeof setInterval> {
+async function pollMarkets(): Promise<void> {
+  try {
+    const res = await fetch('/fleet/markets');
+    if (!res.ok) return;
+    const contentType = res.headers.get('content-type') ?? '';
+    if (!contentType.includes('application/json')) return;
+    const data = await res.json();
+    const markets = Array.isArray(data) ? data : data.markets || [];
+    useFleetStore.getState().setMarkets(markets);
+  } catch {
+    // best-effort
+  }
+}
+
+/**
+ * Start polling the Fleet API for deployment status, credit balance, and GPU markets.
+ * Returns a cleanup function that stops all intervals.
+ */
+export function startFleetPolling(): () => void {
   pollFleetOnce();
   pollCredits();
-  setInterval(pollCredits, 30_000);
-  return setInterval(pollFleetOnce, POLL_INTERVAL);
+  pollMarkets();
+  const fleetInterval = setInterval(pollFleetOnce, POLL_INTERVAL);
+  const creditsInterval = setInterval(pollCredits, 30_000);
+  const marketsInterval = setInterval(pollMarkets, 60_000);
+
+  return () => {
+    clearInterval(fleetInterval);
+    clearInterval(creditsInterval);
+    clearInterval(marketsInterval);
+  };
 }

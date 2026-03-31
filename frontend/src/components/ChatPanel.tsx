@@ -1,5 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Loader2 } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Card, CardContent } from '@/components/ui/card';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { useChatStore } from '../stores/chatStore';
 import {
   getAgents,
@@ -13,26 +18,7 @@ import {
 } from '../lib/elizaClient';
 import { setFleetAgentId, pollFleetOnce } from '../lib/fleetPoller';
 import { useMissionStore } from '../stores/missionStore';
-
-function sanitizeHtml(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-function renderMarkdown(text: string): string {
-  const safe = sanitizeHtml(text);
-  return safe
-    .replace(/^### (.+)$/gm, '<h3 class="text-sm font-semibold text-zinc-200 mt-3 mb-1">$1</h3>')
-    .replace(/^## (.+)$/gm, '<h2 class="text-base font-bold text-zinc-100 mt-4 mb-2">$1</h2>')
-    .replace(/^# (.+)$/gm, '<h1 class="text-lg font-bold text-white mt-4 mb-2">$1</h1>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong class="text-zinc-100 font-semibold">$1</strong>')
-    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
-    .replace(/`([^`]+)`/g, '<code class="bg-zinc-800 text-indigo-300 px-1.5 py-0.5 rounded text-xs font-mono">$1</code>')
-    .replace(/^\d+\. (.+)$/gm, '<li class="ml-4 text-zinc-300">$1</li>')
-    .replace(/^- (.+)$/gm, '<li class="ml-4 text-zinc-300 list-disc">$1</li>')
-    .replace(/^---$/gm, '<hr class="border-zinc-700 my-3">')
-    .replace(/\n\n/g, '<br><br>')
-    .replace(/\n/g, '<br>');
-}
+import { renderMarkdown } from '../lib/markdown';
 
 function enrichMessage(text: string): string {
   if (text.includes('Mission planned!') || text.includes('agents in pipeline')) {
@@ -49,29 +35,49 @@ function isInternalMessage(text: string): boolean {
   return /^(Executing action:|Action:|(\[Action\]))/.test(text);
 }
 
+interface MissionHistoryEntry {
+  id: string;
+  mission: string;
+  status: 'complete' | 'error';
+  stepsCount: number;
+  totalTime: number;
+}
+
 const MISSION_TEMPLATES = [
   {
+    id: 'research',
     icon: '\u{1F50D}',
     title: 'Research Pipeline',
-    description: 'Research a topic and write a detailed blog post',
+    description: 'Web research \u2192 analysis \u2192 report',
+    badge: '3 agents',
+    badgeColor: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
     prompt: 'Research the latest developments in artificial intelligence and write me a comprehensive blog post',
   },
   {
+    id: 'content',
     icon: '\u{270D}\u{FE0F}',
     title: 'Content Pipeline',
-    description: 'Blog post + YouTube script from research',
+    description: 'Research \u2192 blog + script in parallel',
+    badge: '4 agents \u00B7 parallel',
+    badgeColor: 'bg-violet-500/20 text-violet-400 border-violet-500/30',
     prompt: 'Research AI trends and write me a blog post AND a YouTube video script',
   },
   {
+    id: 'competitive',
     icon: '\u{1F4CA}',
     title: 'Competitive Analysis',
-    description: 'Research competitors and create a report',
-    prompt: 'Research the top AI startups in 2026, analyze their strengths and weaknesses, and write a competitive analysis report',
+    description: 'Parallel deep dives \u2192 comparison report',
+    badge: '5 agents \u00B7 parallel',
+    badgeColor: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
+    prompt: 'Run a multi-agent pipeline mission: research and compare CrewAI vs AutoGen vs ElizaOS. Research each framework, then write a competitive analysis report with comparison table.',
   },
   {
-    icon: '\u{1F680}',
+    id: 'quick',
+    icon: '\u{26A1}',
     title: 'Quick Agent',
-    description: 'Deploy one agent for a specific task',
+    description: 'Single agent, fast execution',
+    badge: '1 agent',
+    badgeColor: 'bg-green-500/20 text-green-400 border-green-500/30',
     prompt: 'Create a research agent that monitors Hacker News for AI papers',
   },
 ];
@@ -86,7 +92,7 @@ export function ChatPanel() {
   const inputRef = useRef<HTMLInputElement>(null);
   const missionStatus = useMissionStore(s => s.status);
   const isMissionActive = missionStatus === 'deploying' || missionStatus === 'executing' || missionStatus === 'planning';
-  const [history, setHistory] = useState<any[]>([]);
+  const [history, setHistory] = useState<MissionHistoryEntry[]>([]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -199,11 +205,6 @@ export function ChatPanel() {
     }
   };
 
-  const statusLabel =
-    status === 'connected' ? 'Connected' :
-    status === 'connecting' ? 'Connecting...' :
-    'Disconnected';
-
   const statusDotColor =
     status === 'connected' ? 'bg-green-500' :
     status === 'connecting' ? 'bg-amber-500 animate-pulse' :
@@ -212,23 +213,25 @@ export function ChatPanel() {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center gap-3 px-5 py-4 border-b border-zinc-800">
+      <div className="flex items-center gap-3 px-5 py-3 border-b border-zinc-800/60 bg-zinc-900/60">
         <div className="relative">
-          <img src="/assets/thinker.png" alt="AgentForge" className="w-10 h-10 rounded-full object-cover" />
-          <div className={`absolute bottom-0 right-0 w-3 h-3 rounded-full ${statusDotColor} border-2 border-zinc-950`} />
+          <img src="/assets/thinker.png" alt="AgentForge" className="w-9 h-9 rounded-full object-cover ring-2 ring-zinc-800" />
+          <div className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ${statusDotColor} border-2 border-zinc-900`} />
         </div>
         <div>
-          <div className="text-sm font-semibold text-zinc-100">AgentForge</div>
-          <div className="text-xs text-zinc-500">{statusLabel}</div>
+          <div className="text-sm font-semibold text-zinc-100">AgentForge Chat</div>
+          <div className="text-[11px] text-zinc-500">
+            {status === 'connected' ? 'Connected' : status === 'connecting' ? 'Connecting...' : 'Disconnected'}
+          </div>
         </div>
       </div>
 
       {/* Mission History */}
       {history.length > 0 && (
-        <div className="px-4 py-2 border-b border-zinc-800">
+        <div className="px-4 py-2 border-b border-zinc-800/40 bg-zinc-900/30">
           <div className="text-[11px] font-medium text-zinc-600 uppercase tracking-wider mb-1">Recent Missions</div>
           <div className="space-y-0.5 max-h-28 overflow-y-auto">
-            {history.slice(0, 5).map((h: any) => (
+            {history.slice(0, 5).map((h) => (
               <button
                 key={h.id}
                 onClick={() => handleSend(h.mission)}
@@ -253,44 +256,51 @@ export function ChatPanel() {
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
         {errorMsg && (
-          <div className="text-center text-sm text-red-400 bg-red-950/30 rounded-lg px-4 py-3">
+          <div className="text-center text-sm text-red-400 bg-red-950/30 rounded-lg px-4 py-3 border border-red-800/30">
             {errorMsg}. Make sure ElizaOS is running on port 3000.
           </div>
         )}
 
         {messages.length === 0 && !errorMsg && (
           <div className="flex flex-col items-center justify-center h-full gap-5 text-center px-4">
-            <img src="/assets/thinker.png" alt="AgentForge" className="w-14 h-14 rounded-full object-cover" />
+            <img src="/assets/thinker.png" alt="AgentForge" className="w-14 h-14 rounded-full object-cover ring-2 ring-zinc-800" />
             <div>
               <h2 className="text-lg font-semibold text-zinc-200 mb-1">What do you want to build?</h2>
               <p className="text-xs text-zinc-500">Choose a template or type your own mission</p>
             </div>
-            <div className="grid grid-cols-2 gap-2.5 w-full max-w-md">
-              {MISSION_TEMPLATES.map((t, i) => (
-                <button
-                  key={i}
-                  onClick={() => handleSend(t.prompt)}
-                  className="text-left p-3 bg-zinc-900/80 hover:bg-zinc-800 border border-zinc-800 hover:border-indigo-500/50 rounded-lg transition-all group"
-                >
-                  <div className="text-base mb-1">{t.icon}</div>
-                  <div className="text-xs font-medium text-zinc-200 group-hover:text-white">{t.title}</div>
-                  <div className="text-[11px] text-zinc-500 mt-0.5 line-clamp-2">{t.description}</div>
-                </button>
+            <div className="grid grid-cols-1 gap-2.5 w-full max-w-md">
+              {MISSION_TEMPLATES.map((t) => (
+                <Card key={t.id} className="cursor-pointer hover:bg-accent/50 transition-colors group template-card" onClick={() => handleSend(t.prompt)}>
+                  <CardContent className="p-3">
+                    <div className="flex items-start gap-3">
+                      <span className="text-xl mt-0.5 group-hover:scale-110 transition-transform">{t.icon}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-sm font-medium text-zinc-200">{t.title}</span>
+                          <Badge variant="secondary" className="text-[10px]">
+                            {t.badge}
+                          </Badge>
+                        </div>
+                        <p className="text-xs text-zinc-500">{t.description}</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
               ))}
             </div>
           </div>
         )}
 
         {messages.map((msg) => (
-          <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start items-start gap-2'}`}>
+          <div key={msg.id} className={`flex message-enter ${msg.role === 'user' ? 'justify-end' : 'justify-start items-start gap-2'}`}>
             {msg.role === 'assistant' && (
-              <img src="/assets/thinker.png" alt="" className="w-7 h-7 rounded-full object-cover shrink-0 mt-0.5" />
+              <Avatar className="w-7 h-7 shrink-0 mt-0.5"><AvatarFallback className="bg-primary/10 text-primary text-[10px]">AF</AvatarFallback></Avatar>
             )}
             <div
               className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
                 msg.role === 'user'
-                  ? 'bg-purple-600 text-white whitespace-pre-wrap'
-                  : 'bg-zinc-800 text-zinc-200'
+                  ? 'bg-primary text-primary-foreground whitespace-pre-wrap'
+                  : 'bg-muted border'
               }`}
             >
               {msg.role === 'user' ? (
@@ -303,23 +313,23 @@ export function ChatPanel() {
         ))}
 
         {isLoading && (
-          <div className="flex justify-start">
-            <div className="bg-zinc-800 rounded-2xl px-4 py-3 flex items-center gap-2">
-              <Loader2 className="w-4 h-4 animate-spin text-purple-400" />
+          <div className="flex justify-start message-enter">
+            <div className="bg-zinc-800/80 border border-zinc-700/30 rounded-2xl px-4 py-3 flex items-center gap-2">
+              <Loader2 className="w-4 h-4 animate-spin text-violet-400" />
               <span className="text-sm text-zinc-400">Thinking...</span>
             </div>
           </div>
         )}
 
         {isMissionActive && (
-          <div className="flex items-center gap-2 px-3 py-2.5 bg-indigo-950/30 border border-indigo-800/30 rounded-lg">
+          <div className="flex items-center gap-2 px-3 py-2.5 bg-violet-950/20 border border-violet-800/20 rounded-lg message-enter">
             <div className="flex gap-1">
-              <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-              <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-              <span className="w-1.5 h-1.5 bg-indigo-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+              <span className="w-1.5 h-1.5 bg-violet-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+              <span className="w-1.5 h-1.5 bg-violet-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+              <span className="w-1.5 h-1.5 bg-violet-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
             </div>
-            <span className="text-xs text-indigo-300">
-              Mission in progress — watch the <strong>Mission</strong> tab for live updates
+            <span className="text-xs text-violet-300">
+              Mission in progress — watch the <strong>Mission Canvas</strong> tab for live updates
             </span>
           </div>
         )}
@@ -328,25 +338,21 @@ export function ChatPanel() {
       </div>
 
       {/* Input */}
-      <div className="px-4 py-3 border-t border-zinc-800">
-        <div className="flex items-center gap-2 bg-zinc-900 rounded-xl px-4 py-2 border border-zinc-800 focus-within:border-purple-600/50">
-          <input
+      <div className="px-4 py-3 border-t bg-card/40">
+        <div className="flex items-center gap-2 bg-zinc-800/50 rounded-xl px-4 py-2 border border-zinc-700/40 focus-within:border-violet-500/50 focus-within:ring-2 focus-within:ring-violet-500/20 transition-all">
+          <Input
             ref={inputRef}
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Type a mission or ask AgentForge anything..."
-            className="flex-1 bg-transparent outline-none text-sm text-zinc-200 placeholder-zinc-600"
+            className="flex-1 bg-transparent border-0 outline-none text-sm text-zinc-200 placeholder-zinc-600 focus-visible:ring-0 focus-visible:border-0 h-auto py-0"
             disabled={isLoading}
           />
-          <button
-            onClick={() => handleSend()}
-            disabled={!input.trim() || isLoading}
-            className="p-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-          >
-            <Send className="w-4 h-4 text-white" />
-          </button>
+          <Button size="icon" onClick={() => handleSend()} disabled={!input.trim() || isLoading} className="shrink-0">
+            <Send className="w-4 h-4" />
+          </Button>
         </div>
       </div>
     </div>

@@ -9,6 +9,14 @@ function getDependencies(step: { dependsOn?: string | string[] }): string[] {
   return Array.isArray(step.dependsOn) ? step.dependsOn : [step.dependsOn];
 }
 
+/**
+ * Calculate the depth level of each step in the pipeline DAG.
+ * Steps with no dependencies are depth 0. Steps depending on depth-N nodes are depth N+1.
+ * Steps at the same depth level can execute in parallel.
+ *
+ * @param steps - Pipeline steps with dependsOn fields
+ * @returns Map of depth level → array of step IDs at that level
+ */
 function calculateDepthLevels(steps: { id: string; dependsOn?: string | string[] }[]): Map<number, string[]> {
   const depths = new Map<string, number>();
 
@@ -161,6 +169,8 @@ function buildRootPrompt(task: string, mission?: string, template?: string): str
       '5. Do NOT provide a response based only on your training data — the user needs CURRENT web information',
       '6. Your output will be passed to other agents who will use it to create content',
       '',
+      'IMPORTANT: Do NOT say "I will research" or "Starting research now" or "Let me look into this". Actually DO the research RIGHT NOW in this response. Provide your complete findings, analysis, and sources in THIS message. Your response IS the deliverable — there is no follow-up. Write at least 500 words of actual research content.',
+      '',
       mission ? `ORIGINAL MISSION: ${mission}` : '',
       '',
       'SEARCH THE WEB FIRST, THEN PROVIDE YOUR RESEARCH FINDINGS:',
@@ -168,14 +178,16 @@ function buildRootPrompt(task: string, mission?: string, template?: string): str
   }
 
   return [
-    'You are executing a task. Do NOT say "I\'ll do this" or "Let me help you." Provide your complete output IMMEDIATELY.',
+    'You are executing a task. Your ENTIRE response must be the completed work product. Do not acknowledge, plan, or outline — just produce the final result.',
     '',
     `TASK: ${task}`,
+    '',
+    'IMPORTANT: Do NOT say "I will write" or "Starting now" or "Let me help you" or "I\'ll create this". Actually WRITE the complete content RIGHT NOW in this response. Your response IS the final deliverable. Write at least 500 words.',
     '',
     'INSTRUCTIONS:',
     '- Provide detailed, substantive content — not a plan or offer to help',
     '- Include specific facts, examples, names, and details from your knowledge',
-    '- Write at least 300 words of actual content',
+    '- Write at least 500 words of actual content',
     '- Do NOT ask clarifying questions — just execute with your best judgment',
     '',
     'PROVIDE YOUR COMPLETE OUTPUT NOW:',
@@ -184,7 +196,7 @@ function buildRootPrompt(task: string, mission?: string, template?: string): str
 
 function buildSequentialPrompt(task: string, parentOutput: string): string {
   return [
-    'You are executing a task. The previous agent provided input below. Use it to complete your task.',
+    'You are executing a task. Your ENTIRE response must be the completed work product. Do not acknowledge, plan, or outline — just produce the final result.',
     '',
     '=== INPUT FROM PREVIOUS AGENT ===',
     parentOutput,
@@ -192,11 +204,13 @@ function buildSequentialPrompt(task: string, parentOutput: string): string {
     '',
     `TASK: ${task}`,
     '',
+    'IMPORTANT: Do NOT say "I will write" or "Starting now" or "Let me help you". Actually WRITE the complete content RIGHT NOW in this response. Your response IS the final deliverable. Write at least 500 words.',
+    '',
     'INSTRUCTIONS:',
     '- Use ALL the information above as your source material',
     '- Do NOT ask for more data — work with what you have',
     '- Produce a complete, polished output ready for the end user',
-    '- Write at least 400 words of detailed content',
+    '- Write at least 500 words of detailed content',
     '',
     'PRODUCE YOUR COMPLETE OUTPUT NOW:',
   ].join('\n');
@@ -208,25 +222,28 @@ function buildMergePrompt(task: string, parentOutputs: { name: string; output: s
   ).join('\n\n');
 
   return [
-    'You are executing a task. Multiple previous agents provided their outputs below. Combine and use ALL of them.',
+    'You are executing a task. Your ENTIRE response must be the completed work product. Do not acknowledge, plan, or outline — just produce the final result.',
     '',
     sections,
     '',
     `TASK: ${task}`,
     '',
+    'IMPORTANT: Produce the COMPLETE report RIGHT NOW in this response. Include: (1) Executive Summary, (2) Feature Comparison Table in markdown, (3) Strengths & Weaknesses for each, (4) Market Positioning, (5) Recommendation. Write at least 800 words. Do NOT say "I will analyze" — just DO IT.',
+    '',
     'INSTRUCTIONS:',
     '- Use ALL the inputs provided above — do not ignore any',
     '- Combine, synthesize, and integrate the information',
-    '- Produce a cohesive, unified output',
+    '- Produce a cohesive, unified output with markdown headers and tables',
     '- If inputs overlap, merge them intelligently',
     '- If inputs complement each other, weave them together',
+    '- Do NOT summarize what you will do — DO IT NOW in this response',
     '',
     'PRODUCE YOUR COMBINED OUTPUT NOW:',
   ].join('\n');
 }
 
 function buildFallbackPrompt(task: string, missionText: string): string {
-  return `The previous agent was unavailable. Complete this mission using your own knowledge.\n\nMISSION: ${missionText}\nTASK: ${task}\n\nProvide a complete, detailed response. Execute the task NOW:`;
+  return `The previous agent was unavailable. Complete this mission using your own knowledge. Your ENTIRE response must be the completed work product — do not acknowledge, plan, or outline.\n\nMISSION: ${missionText}\nTASK: ${task}\n\nIMPORTANT: Do NOT say "I will" or "Let me". Produce the COMPLETE, detailed result RIGHT NOW. Write at least 500 words. Execute the task NOW:`;
 }
 
 // ── Orchestrator ─────────────────────────────────────────
@@ -291,13 +308,71 @@ JSON array only, no markdown:`,
           return { id: `step-${i}`, template: s.template, name: s.name, task: s.task, dependsOn };
         });
     } catch (err) {
-      console.warn('[MissionOrchestrator] LLM planning failed, using fallback:', err);
+      console.warn('[AgentForge:Orchestrator] LLM planning failed, using fallback:', err);
       return this.planFallback(mission);
     }
   }
 
+  /**
+   * Extract comparison subjects from a competitive analysis mission.
+   * Detects patterns like "X vs Y vs Z", "compare X, Y, and Z".
+   */
+  private extractComparisonSubjects(mission: string): string[] {
+    // Pattern: "X vs Y vs Z"
+    const vsAll = mission.match(/(.+?)(?:\s+vs\.?\s+)(.+?)(?:\s+vs\.?\s+)(.+?)(?:\s*$|\s*[.!?,])/i);
+    if (vsAll) return [vsAll[1].trim(), vsAll[2].trim(), vsAll[3].trim()];
+
+    // Pattern: "X vs Y"
+    const vs2 = mission.match(/(.+?)(?:\s+vs\.?\s+|\s+versus\s+)(.+?)(?:\s*$|\s*[.!?,])/i);
+    if (vs2) return [vs2[1].trim(), vs2[2].trim()];
+
+    // Pattern: "compare X, Y, and Z"
+    const commaMatch = mission.match(/(?:compare|analysis of|benchmark)\s+(.+)/i);
+    if (commaMatch) {
+      const parts = commaMatch[1].split(/,\s*|\s+and\s+|\s+&\s+/).map(s => s.trim()).filter(s => s.length > 1 && s.length < 40);
+      if (parts.length >= 2) return parts.slice(0, 4);
+    }
+
+    return [];
+  }
+
   private planFallback(mission: string): PipelineStep[] {
     const lower = mission.toLowerCase();
+
+    // Competitive analysis pattern → 5-agent parallel pipeline (guaranteed for demo)
+    const isCompetitive = /competitive\s*analysis|compare.*(?:vs|versus|against)|benchmark.*(?:framework|tool|platform)/i.test(mission)
+      || (lower.includes('vs') && (lower.includes('compare') || lower.includes('analysis')));
+
+    if (isCompetitive) {
+      console.log('[AgentForge:Orchestrator] Detected competitive analysis — using 5-agent parallel pipeline');
+      const subjects = this.extractComparisonSubjects(mission);
+      const subjectList = subjects.length >= 2 ? subjects.slice(0, 3) : ['Option A', 'Option B', 'Option C'];
+
+      const steps: PipelineStep[] = [
+        {
+          id: 'step-0', template: 'researcher', name: 'Lead-Researcher',
+          task: `Search the web for an overview of the competitive landscape around: ${mission}. Identify the main players, their key differentiators, recent developments, and market positioning. Provide a structured overview with sources.`,
+          dependsOn: undefined,
+        },
+      ];
+
+      subjectList.forEach((subject, i) => {
+        steps.push({
+          id: `step-${i + 1}`, template: 'researcher',
+          name: `${subject.replace(/[^a-zA-Z0-9 ]/g, '').trim().replace(/\s+/g, '-')}-Researcher`,
+          task: `Do a deep dive on ${subject}: features, pricing, strengths, weaknesses, recent updates, user sentiment, and unique selling points. Search the web for the latest information. Be specific and cite sources.`,
+          dependsOn: 'step-0',
+        });
+      });
+
+      steps.push({
+        id: `step-${subjectList.length + 1}`, template: 'analyst', name: 'Competitive-Analyst',
+        task: `Synthesize all research into a comprehensive competitive analysis report: (1) Executive Summary, (2) Feature Comparison Table, (3) Strengths & Weaknesses, (4) Market Positioning, (5) Recommendation. Use markdown headers and tables.`,
+        dependsOn: subjectList.map((_, i) => `step-${i + 1}`),
+      });
+
+      return steps;
+    }
 
     // Detect "X AND Y" parallel pattern — needs 3+ meaningful segments
     const andParts = mission.split(/\band\b/i).map(s => s.trim()).filter(s => s.length > 10);
@@ -369,9 +444,20 @@ JSON array only, no markdown:`,
     return steps;
   }
 
-  async execute(mission: string, callback?: (text: string) => Promise<void>, originalMission?: string): Promise<MissionResult> {
+  /**
+   * Plan and execute a multi-agent DAG pipeline on the Nosana GPU network.
+   * Deploys agents in parallel per depth level, chains outputs as inputs,
+   * and auto-stops all agents when complete.
+   *
+   * @param mission - Natural language mission description
+   * @param _callback - Unused callback (pipeline state polled via REST instead)
+   * @param originalMission - Original mission text if this is a retry
+   * @returns Final output from the leaf nodes of the DAG
+   */
+  async execute(mission: string, narrator?: (text: string) => Promise<void>, originalMission?: string): Promise<MissionResult> {
     const startTime = Date.now();
-    const log = (msg: string) => console.log(`[MissionOrchestrator] ${msg}`);
+    const log = (msg: string) => console.log(`[AgentForge:Orchestrator] ${msg}`);
+    const narrate = (text: string) => { if (narrator) { narrator(text).catch(() => {}); } };
     const missionId = `mission-${Date.now()}`;
     const missionText = originalMission || mission;
 
@@ -380,6 +466,33 @@ JSON array only, no markdown:`,
       id: missionId, mission, status: 'planning', steps: [],
       finalOutput: null, startedAt: startTime, completedAt: null,
     };
+
+    // 0. Stop orphan agents from previous missions/tests
+    const manager = getNosanaManager();
+    try {
+      const fleet = await manager.getFleetStatus();
+      const running = fleet.deployments.filter(
+        d => d.status === 'running' || d.status === 'starting'
+      );
+      if (running.length > 0) {
+        log(`Cleaning up ${running.length} orphan agent(s) before new mission...`);
+        narrate(`\u{1F9F9} Cleaning up ${running.length} running agent(s) from previous sessions...`);
+        await Promise.allSettled(
+          running.map(async dep => {
+            try {
+              await manager.stopDeployment(dep.id);
+              log(`Stopped orphan: ${dep.name} (${dep.id})`);
+            } catch (e: any) {
+              log(`Failed to stop orphan ${dep.name}: ${e.message}`);
+            }
+          })
+        );
+        await new Promise(r => setTimeout(r, 3000));
+        log('Orphan cleanup complete');
+      }
+    } catch (e: any) {
+      log(`Orphan cleanup failed (non-fatal): ${e.message}`);
+    }
 
     // 1. Plan
     log('Planning mission pipeline...');
@@ -432,7 +545,15 @@ JSON array only, no markdown:`,
     syncState('deploying');
     log(`pipeline:created — ${steps.length} steps across ${levels.size} depth levels`);
 
-    const manager = getNosanaManager();
+    // Narrate pipeline plan
+    const maxParallel = Math.max(...[...levels.values()].map(ids => ids.length));
+    narrate(
+      `\u{1F4CB} **Pipeline planned:** ${steps.length} agents across ${levels.size} stage${levels.size > 1 ? 's' : ''}` +
+      (maxParallel > 1 ? ` (${maxParallel} running in parallel)` : '') +
+      `\n\n` +
+      steps.map(s => `\u2022 **${s.name}** \u2014 ${s.task.slice(0, 80)}...`).join('\n')
+    );
+
     const market = await manager.getBestMarket();
     if (!market) throw new Error('No GPU markets available');
     marketName = market.name;
@@ -481,25 +602,86 @@ JSON array only, no markdown:`,
       }
     };
 
+    const triedMarketAddresses: string[] = market ? [market.address] : [];
+
     const waitReady = async (node: PipelineNode): Promise<boolean> => {
       if (node.status === 'error' || !node.url) return false;
-      const client = new WorkerClient(node.url);
 
-      for (let attempt = 0; attempt < 2; attempt++) {
-        try {
-          await client.waitForReady(240_000);
-          node.status = 'ready';
-          log(`node:status — ${node.step.name}: ready${attempt > 0 ? ' (retry)' : ''}`);
-          syncState();
-          return true;
-        } catch (err: any) {
-          log(`node:status — ${node.step.name}: waitForReady attempt ${attempt + 1} failed — ${err.message}`);
+      // Attempt 1: wait on current deployment
+      try {
+        const client = new WorkerClient(node.url);
+        await client.waitForReady(180_000);
+        node.status = 'ready';
+        log(`node:status — ${node.step.name}: ready`);
+        syncState();
+        return true;
+      } catch (err: any) {
+        log(`node:status — ${node.step.name}: waitForReady failed — ${err.message}`);
+      }
+
+      // Attempt 2: redeploy on a different market
+      log(`node:status — ${node.step.name}: worker didn't boot — trying next GPU market`);
+      narrate(`\u{26A0}\u{FE0F} **${node.step.name}** worker didn't boot — retrying on different market...`);
+
+      try { if (node.deploymentId) await manager.stopDeployment(node.deploymentId); } catch {}
+
+      const nextMarket = await manager.getNextBestMarket(triedMarketAddresses);
+      if (!nextMarket) {
+        node.status = 'error';
+        node.error = 'Worker failed to boot and no alternative markets available';
+        log(`node:status — ${node.step.name}: no alternative markets`);
+        syncState();
+        return false;
+      }
+      triedMarketAddresses.push(nextMarket.address);
+      log(`node:status — ${node.step.name}: redeploying on ${nextMarket.name}`);
+      narrate(`\u{1F504} Redeploying **${node.step.name}** on ${nextMarket.name}...`);
+
+      const tmpl = AGENT_TEMPLATES[node.step.template] || AGENT_TEMPLATES['researcher'];
+      try {
+        const newDep = await manager.createAndStartDeployment({
+          name: `mission-${node.step.name}`,
+          dockerImage: workerImage,
+          env: {
+            AGENT_TEMPLATE: node.step.template,
+            AGENT_NAME: node.step.name,
+            AGENT_SYSTEM_PROMPT: tmpl.defaultPrompt,
+            AGENT_PLUGINS: tmpl.plugins.join(','),
+            OPENAI_API_KEY: process.env.OPENAI_API_KEY || 'nosana',
+            OPENAI_BASE_URL: process.env.OPENAI_BASE_URL || process.env.OPENAI_API_URL || '',
+            OPENAI_API_URL: process.env.OPENAI_BASE_URL || process.env.OPENAI_API_URL || '',
+            OPENAI_SMALL_MODEL: process.env.OPENAI_SMALL_MODEL || 'Qwen3.5-27B-AWQ-4bit',
+            OPENAI_LARGE_MODEL: process.env.OPENAI_LARGE_MODEL || 'Qwen3.5-27B-AWQ-4bit',
+            MODEL_NAME: process.env.MODEL_NAME || 'Qwen3.5-27B-AWQ-4bit',
+            TAVILY_API_KEY: process.env.TAVILY_API_KEY || '',
+            SERVER_PORT: '3000',
+          },
+          resolvedMarket: nextMarket,
+          timeout: 30,
+        });
+        node.deploymentId = newDep.id;
+        node.url = newDep.url;
+        syncState();
+
+        if (newDep.url) {
+          const client2 = new WorkerClient(newDep.url);
+          try {
+            await client2.waitForReady(180_000);
+            node.status = 'ready';
+            log(`node:status — ${node.step.name}: ready (fallback market ${nextMarket.name})`);
+            syncState();
+            return true;
+          } catch (err2: any) {
+            log(`node:status — ${node.step.name}: fallback boot also failed — ${err2.message}`);
+          }
         }
+      } catch (redeployErr: any) {
+        log(`node:status — ${node.step.name}: redeploy failed — ${redeployErr.message}`);
       }
 
       node.status = 'error';
-      node.error = 'Not ready after extended wait';
-      log(`node:status — ${node.step.name}: giving up`);
+      node.error = 'Worker failed to boot after 2 attempts on different markets';
+      log(`node:status — ${node.step.name}: giving up after 2 attempts`);
       syncState();
       return false;
     };
@@ -559,6 +741,11 @@ JSON array only, no markdown:`,
 
       log(`level:${depth} — ${levelNodes.length} agent(s): ${levelNodes.map(n => n.step.name).join(', ')}`);
 
+      // Narrate deployment
+      for (const n of levelNodes) {
+        narrate(`\u{1F680} Deploying **${n.step.name}** to ${marketName} ($${marketCost?.toFixed(3)}/hr)...`);
+      }
+
       // Deploy all at this level in parallel
       await Promise.all(levelNodes.map(n => deployOne(n)));
 
@@ -568,7 +755,33 @@ JSON array only, no markdown:`,
       // Execute all ready agents in parallel
       const readyNodes = levelNodes.filter(n => n.status === 'ready');
       if (readyNodes.length > 0) {
+        if (readyNodes.length > 1) {
+          narrate(
+            `\u{26A1} **${readyNodes.length} agents working in parallel** on separate Nosana GPUs:\n` +
+            readyNodes.map(n => `\u2022 ${n.step.name}`).join('\n')
+          );
+        } else {
+          const templateIcons: Record<string, string> = { researcher: '\u{1F50D}', writer: '\u{270D}\u{FE0F}', analyst: '\u{1F4CA}', monitor: '\u{1F441}\u{FE0F}', publisher: '\u{1F4E2}' };
+          const icon = templateIcons[readyNodes[0].step.template] || '\u{1F916}';
+          narrate(`${icon} **${readyNodes[0].step.name}** is working...`);
+        }
+
+        const levelStart = Date.now();
         await Promise.all(readyNodes.map(n => executeOne(n)));
+        const levelElapsed = Math.round((Date.now() - levelStart) / 1000);
+
+        // Narrate level completion
+        const completedNames = readyNodes.filter(n => n.status === 'complete').map(n => n.step.name);
+        if (completedNames.length > 0) {
+          narrate(`\u{2705} ${completedNames.join(', ')} complete (${levelElapsed}s)`);
+        }
+
+        // Narrate intermediate cost
+        const elapsedHrs = (Date.now() - startTime) / 3_600_000;
+        const currentCost = (marketCost || 0) * steps.length * elapsedHrs;
+        if (currentCost > 0.0001 && depth < maxDepth) {
+          narrate(`\u{1F4B0} Mission cost so far: $${currentCost.toFixed(4)}`);
+        }
       }
     }
 
@@ -607,6 +820,7 @@ JSON array only, no markdown:`,
     }
 
     // 5. Cleanup
+    narrate(`\u{1F3C1} All agents complete \u2014 stopping ${nodes.filter(n => n.deploymentId).length} deployments to save credits...`);
     log('Cleaning up mission agents...');
     for (const node of nodes) {
       if (node.deploymentId) {

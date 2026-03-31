@@ -1,4 +1,7 @@
 import { Component, type ReactNode, type ErrorInfo } from 'react';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import { AlertCircle } from 'lucide-react';
 
 interface Props {
   children: ReactNode;
@@ -19,36 +22,46 @@ export class ErrorBoundary extends Component<Props, State> {
     return { hasError: true, error };
   }
 
-  componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
-    console.error('[ErrorBoundary] Caught error:', error, errorInfo);
+  componentDidMount(): void {
+    window.addEventListener('error', this.handleWindowError);
+    window.addEventListener('unhandledrejection', this.handleUnhandledRejection);
   }
+
+  componentWillUnmount(): void {
+    window.removeEventListener('error', this.handleWindowError);
+    window.removeEventListener('unhandledrejection', this.handleUnhandledRejection);
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
+    console.error('[AgentForge:Error]', error, errorInfo);
+  }
+
+  private handleWindowError = (event: ErrorEvent): void => {
+    console.error('[AgentForge:Error]', event.message, event.error);
+    // Only crash the UI for ReactFlow errors — polling/network errors are non-critical
+    if (event.message?.includes('ReactFlow') || event.message?.includes('react-flow')) {
+      this.setState({ hasError: true, error: event.error });
+    }
+  };
+
+  private handleUnhandledRejection = (event: PromiseRejectionEvent): void => {
+    console.error('[AgentForge:UnhandledRejection]', event.reason);
+    // WebSocket disconnects are expected during deployment — don't crash the UI
+  };
 
   render(): ReactNode {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen bg-zinc-950 flex items-center justify-center p-8">
-          <div className="max-w-md text-center">
-            <div className="text-4xl mb-4">&#x26A0;&#xFE0F;</div>
-            <h1 className="text-xl font-bold text-white mb-2">Something went wrong</h1>
-            <p className="text-sm text-zinc-400 mb-4">
-              AgentForge encountered an unexpected error. This is usually temporary.
-            </p>
-            {this.state.error && (
-              <pre className="text-xs text-red-400 bg-zinc-900 p-3 rounded mb-4 text-left overflow-x-auto">
-                {this.state.error.message}
-              </pre>
-            )}
-            <button
-              onClick={() => window.location.reload()}
-              className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded transition-colors"
-            >
-              Reload Page
-            </button>
-          </div>
+        <div className="h-screen flex items-center justify-center bg-zinc-950 text-zinc-300">
+          <Alert variant="destructive" className="max-w-md">
+            <AlertCircle className="h-4 w-4" />
+            <AlertTitle>Something went wrong</AlertTitle>
+            <AlertDescription>{this.state.error?.message || 'An unexpected error occurred'}</AlertDescription>
+            <Button variant="outline" size="sm" className="mt-3" onClick={() => { this.setState({ hasError: false, error: null }); window.location.reload(); }}>Reload AgentForge</Button>
+          </Alert>
         </div>
       );
     }
-
     return this.props.children;
   }
 }

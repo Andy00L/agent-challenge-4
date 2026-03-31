@@ -25,7 +25,7 @@ export const checkFleetStatusAction: Action = {
       (text.includes('cost') && !text.includes('create'))
     );
   },
-  handler: async (runtime: any, message: any, _state?: any, _options?: any, callback?: any) => {
+  handler: async (_runtime: any, _message: any, _state?: any, _options?: any, callback?: any) => {
     const manager = getNosanaManager();
     const fleet = await manager.getFleetStatus();
 

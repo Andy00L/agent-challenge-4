@@ -20,15 +20,26 @@ export interface AgentActivity {
   lastFetched: number;
 }
 
+export interface GpuMarket {
+  address: string;
+  name: string;
+  slug: string;
+  gpu: string;
+  pricePerHour: number;
+  type?: string;
+}
+
 interface FleetStore {
   deployments: DeploymentInfo[];
   totalCostPerHour: number;
   totalSpent: number;
   creditsBalance: number | null;
   agentActivity: Record<string, AgentActivity>;
+  markets: GpuMarket[];
   setDeployments: (deps: DeploymentInfo[]) => void;
   setTotalSpent: (spent: number) => void;
   setCreditsBalance: (balance: number | null) => void;
+  setMarkets: (markets: GpuMarket[]) => void;
   fetchActivity: (deploymentId: string) => Promise<void>;
 }
 
@@ -38,6 +49,7 @@ export const useFleetStore = create<FleetStore>((set) => ({
   totalSpent: 0,
   creditsBalance: null,
   agentActivity: {},
+  markets: [],
   setDeployments: (deps) =>
     set({
       deployments: deps,
@@ -47,6 +59,7 @@ export const useFleetStore = create<FleetStore>((set) => ({
     }),
   setTotalSpent: (spent) => set({ totalSpent: spent }),
   setCreditsBalance: (balance) => set({ creditsBalance: balance }),
+  setMarkets: (markets) => set({ markets }),
   fetchActivity: async (deploymentId) => {
     try {
       const res = await fetch(`/fleet/${deploymentId}/activity`);

@@ -17,6 +17,7 @@ export interface FleetStatus {
   totalCostPerHour: number;
   totalReplicas: number;
   activeCount: number;
+  totalSpent: number;
 }
 
 export interface GpuMarket {

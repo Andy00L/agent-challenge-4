@@ -5,7 +5,7 @@ try {
   const kit = await import('@nosana/kit');
   createNosanaClient = kit.createNosanaClient;
 } catch (e) {
-  console.warn('[NosanaManager] Could not import @nosana/kit:', e);
+  console.warn('[AgentForge:Manager] Could not import @nosana/kit:', e);
 }
 
 const NOSANA_STATUS_MAP: Record<string, NosanaDeploymentRecord['status']> = {
@@ -34,7 +34,7 @@ export class NosanaManager {
   private ensureClient(): boolean {
     if (!this.initialized) {
       if (!this.apiKey || this.apiKey === 'YOUR_NOSANA_API_KEY' || !createNosanaClient) {
-        console.warn('[NosanaManager] No API key or SDK unavailable. Using mock mode.');
+        console.warn('[AgentForge:Manager] No API key or SDK unavailable. Using mock mode.');
         return false;
       }
       try {
@@ -43,13 +43,22 @@ export class NosanaManager {
         });
         this.initialized = true;
       } catch (error) {
-        console.error('[NosanaManager] Failed to initialize Nosana client:', error);
+        console.error('[AgentForge:Manager] Failed to initialize Nosana client:', error);
         return false;
       }
     }
     return true;
   }
 
+  /**
+   * Create and deploy a new agent container on the Nosana GPU network.
+   * Performs credit pre-check, selects the cheapest available GPU market,
+   * and polls for RUNNING status with automatic QUEUED fallback.
+   *
+   * @param params - Deployment configuration (image, ports, env vars, market)
+   * @returns Deployment record with id, url, status, and cost info
+   * @throws If insufficient credits or all GPU markets are full
+   */
   async createAndStartDeployment(params: {
     name: string;
     dockerImage: string;
@@ -80,7 +89,7 @@ export class NosanaManager {
         agentTemplate: params.env.AGENT_TEMPLATE || 'custom',
       };
       this.deployments.set(mockId, record);
-      console.log(`[NosanaManager] Mock deployment created: ${params.name} (${mockId})`);
+      console.log(`[AgentForge:Manager] Mock deployment created: ${params.name} (${mockId})`);
       return record;
     }
 
@@ -107,7 +116,7 @@ export class NosanaManager {
       );
     }
 
-    console.log(`[NosanaManager] Deploying ${params.name}: market=${marketName} address=${marketAddress} cost=$${costPerHour.toFixed(3)}/hr`);
+    console.log(`[AgentForge:Manager] Deploying ${params.name}: market=${marketName} address=${marketAddress} cost=$${costPerHour.toFixed(3)}/hr`);
 
     try {
       const safeName = params.name.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 50);
@@ -144,7 +153,7 @@ export class NosanaManager {
         deployment = await this.client.api.deployments.pipe(
           deploymentBody,
           async (dep: any) => {
-            console.log(`[NosanaManager] Starting deployment: ${params.name}`);
+            console.log(`[AgentForge:Manager] Starting deployment: ${params.name}`);
             await dep.start();
           }
         );
@@ -171,14 +180,14 @@ export class NosanaManager {
       };
 
       this.deployments.set(record.id, record);
-      console.log(`[NosanaManager] Deployment started: ${params.name} (${record.id})`);
+      console.log(`[AgentForge:Manager] Deployment started: ${params.name} (${record.id})`);
 
       // Verify deployment actually started on Nosana
       await new Promise(resolve => setTimeout(resolve, 5000));
       try {
         const refreshed = await this.refreshDeploymentStatus(record.id);
         if (refreshed) {
-          console.log(`[NosanaManager] Verified ${params.name}: status=${refreshed.status}`);
+          console.log(`[AgentForge:Manager] Verified ${params.name}: status=${refreshed.status}`);
           if (refreshed.status === 'error' || refreshed.status === 'stopped') {
             this.deployments.delete(record.id);
             throw new Error(`Deployment failed on Nosana (status: ${refreshed.status}). Check credits and market availability.`);
@@ -186,7 +195,7 @@ export class NosanaManager {
         }
       } catch (verifyErr: any) {
         if (verifyErr.message?.includes('Deployment failed on Nosana')) throw verifyErr;
-        console.warn('[NosanaManager] Could not verify deployment status:', verifyErr);
+        console.warn('[AgentForge:Manager] Could not verify deployment status:', verifyErr);
       }
 
       // Handle QUEUED: wait for RUNNING with automatic market fallback
@@ -197,7 +206,7 @@ export class NosanaManager {
 
       return currentRecord;
     } catch (error) {
-      console.error(`[NosanaManager] Deployment failed for ${params.name}:`, error);
+      console.error(`[AgentForge:Manager] Deployment failed for ${params.name}:`, error);
       throw new Error(`Failed to deploy ${params.name}: ${error}`);
     }
   }
@@ -238,7 +247,7 @@ export class NosanaManager {
 
       if (refreshed.status === 'queued') {
         const elapsed = Math.floor((Date.now() - queueStart) / 1000);
-        console.log(`[NosanaManager] ${record.name}: QUEUED (${elapsed}s, waiting for available GPU node)`);
+        console.log(`[AgentForge:Manager] ${record.name}: QUEUED (${elapsed}s, waiting for available GPU node)`);
 
         if (Date.now() - queueStart > QUEUE_FALLBACK_MS && triedAddresses.length < 3) {
           try { await this.stopDeployment(deploymentId); } catch {}
@@ -247,11 +256,11 @@ export class NosanaManager {
           triedAddresses.push(record.marketAddress);
           const nextMarket = await this.getNextBestMarket(triedAddresses);
           if (!nextMarket) {
-            console.log(`[NosanaManager] No alternative markets available, continuing to wait...`);
+            console.log(`[AgentForge:Manager] No alternative markets available, continuing to wait...`);
             continue;
           }
 
-          console.log(`[NosanaManager] Falling back to ${nextMarket.name} for ${record.name}`);
+          console.log(`[AgentForge:Manager] Falling back to ${nextMarket.name} for ${record.name}`);
           const newRecord = await this.createAndStartDeployment({
             ...params,
             resolvedMarket: nextMarket,
@@ -261,7 +270,7 @@ export class NosanaManager {
       }
 
       if (refreshed.status === 'starting') {
-        console.log(`[NosanaManager] ${record.name}: starting (container booting)`);
+        console.log(`[AgentForge:Manager] ${record.name}: starting (container booting)`);
       }
     }
 
@@ -277,7 +286,7 @@ export class NosanaManager {
         const deployment = await this.client.api.deployments.get(deploymentId);
         await deployment.updateReplicaCount(replicas);
       } catch (error) {
-        console.error(`[NosanaManager] Scale failed for ${deploymentId}:`, error);
+        console.error(`[AgentForge:Manager] Scale failed for ${deploymentId}:`, error);
         throw error;
       }
     }
@@ -290,6 +299,12 @@ export class NosanaManager {
     return record;
   }
 
+  /**
+   * Stop a running deployment and clean up resources.
+   * Gracefully handles already-stopped and not-found deployments.
+   *
+   * @param deploymentId - Deployment ID to stop
+   */
   async stopDeployment(deploymentId: string): Promise<NosanaDeploymentRecord> {
     const record = this.deployments.get(deploymentId);
     if (!record) throw new Error(`Deployment ${deploymentId} not found in fleet`);
@@ -301,9 +316,9 @@ export class NosanaManager {
       } catch (error: any) {
         const msg = error?.message || String(error);
         if (msg.includes('already stopped') || msg.includes('not running') || msg.includes('not found')) {
-          console.log(`[NosanaManager] ${record.name} (${deploymentId}): already stopped, skipping`);
+          console.log(`[AgentForge:Manager] ${record.name} (${deploymentId}): already stopped, skipping`);
         } else {
-          console.error(`[NosanaManager] Stop failed for ${deploymentId}:`, error);
+          console.error(`[AgentForge:Manager] Stop failed for ${deploymentId}:`, error);
           throw error;
         }
       }
@@ -323,13 +338,13 @@ export class NosanaManager {
         const deployment = await this.client.api.deployments.get(deploymentId);
         const apiStatus = (deployment.status || '').toLowerCase();
         const mapped = NOSANA_STATUS_MAP[apiStatus];
-        console.log(`[NosanaManager] Refresh ${record.name}: Nosana=${deployment.status} → ${mapped || record.status}`);
+        console.log(`[AgentForge:Manager] Refresh ${record.name}: Nosana=${deployment.status} → ${mapped || record.status}`);
         record.status = mapped || record.status;
         const endpointUrl = deployment.endpoints?.[0]?.url || deployment.url;
         if (endpointUrl) record.url = endpointUrl;
         this.deployments.set(deploymentId, record);
       } catch (error) {
-        console.warn(`[NosanaManager] Could not refresh ${deploymentId}:`, error);
+        console.warn(`[AgentForge:Manager] Could not refresh ${deploymentId}:`, error);
       }
     }
 
@@ -350,12 +365,12 @@ export class NosanaManager {
       try {
         await this.refreshDeploymentStatus(dep.id);
       } catch (err) {
-        console.warn(`[NosanaManager] Failed to refresh ${dep.name}: ${err}`);
+        console.warn(`[AgentForge:Manager] Failed to refresh ${dep.name}: ${err}`);
       }
     }
   }
 
-  async getFleetStatus(): Promise<FleetStatus & { totalSpent: number }> {
+  async getFleetStatus(): Promise<FleetStatus> {
     await this.refreshAllActiveDeployments();
     const all = Array.from(this.deployments.values());
     const active = all.filter(d => d.status === 'running' || d.status === 'starting');
@@ -411,7 +426,7 @@ export class NosanaManager {
       this.lastMarketFetch = Date.now();
       return markets;
     } catch (err) {
-      console.warn('[NosanaManager] Failed to list markets:', err);
+      console.warn('[AgentForge:Manager] Failed to list markets:', err);
       return fallback;
     }
   }
@@ -428,18 +443,38 @@ export class NosanaManager {
     ) || null;
   }
 
+  /**
+   * Get the cheapest available PREMIUM GPU market from Nosana.
+   * Filters out COMMUNITY markets (they reject credit payments).
+   * Markets are cached for 5 minutes to reduce API calls.
+   *
+   * @returns The cheapest GPU market, or null if none available
+   */
   async getBestMarket(): Promise<GpuMarket | null> {
     const markets = await this.getMarkets();
     // Only premium markets — community/other types reject credit payments
     return markets.find(m => m.pricePerHour > 0 && m.type === 'PREMIUM') || null;
   }
 
+  /**
+   * Get the next cheapest PREMIUM market, excluding already-tried addresses.
+   * Used for QUEUED fallback — when the first market has no available nodes.
+   *
+   * @param excludeAddresses - Market addresses that already returned QUEUED
+   * @returns Next cheapest market, or null if all markets tried
+   */
   async getNextBestMarket(excludeAddresses: string[]): Promise<GpuMarket | null> {
     const markets = await this.getMarkets();
     const excluded = new Set(excludeAddresses);
     return markets.find(m => m.pricePerHour > 0 && m.type === 'PREMIUM' && !excluded.has(m.address)) || null;
   }
 
+  /**
+   * Check the user's available Nosana credit balance.
+   * Tries SDK first, falls back to HTTP API if SDK method unavailable.
+   *
+   * @returns Balance in USD, or null if unable to fetch
+   */
   async getCreditsBalance(): Promise<{ balance: number; currency: string } | null> {
     // Method 1: Use SDK (preferred)
     if (this.ensureClient() && this.client) {
@@ -448,7 +483,7 @@ export class NosanaManager {
         const available = (bal.assignedCredits ?? 0) - (bal.reservedCredits ?? 0) - (bal.settledCredits ?? 0);
         return { balance: available, currency: 'USD' };
       } catch (err) {
-        console.warn('[NosanaManager] SDK credits.balance() failed, trying HTTP fallback:', err);
+        console.warn('[AgentForge:Manager] SDK credits.balance() failed, trying HTTP fallback:', err);
       }
     }
 
@@ -457,16 +492,17 @@ export class NosanaManager {
     try {
       const response = await fetch('https://dashboard.k8s.prd.nos.ci/api/credits/balance', {
         headers: { 'Authorization': `Bearer ${this.apiKey}` },
+        signal: AbortSignal.timeout(10_000),
       });
       if (!response.ok) {
-        console.warn('[NosanaManager] Credits HTTP error:', response.status);
+        console.warn('[AgentForge:Manager] Credits HTTP error:', response.status);
         return null;
       }
       const data = await response.json();
       const available = (data.assignedCredits ?? 0) - (data.reservedCredits ?? 0) - (data.settledCredits ?? 0);
       return { balance: available, currency: 'USD' };
     } catch (err) {
-      console.warn('[NosanaManager] Credits fetch failed:', err);
+      console.warn('[AgentForge:Manager] Credits fetch failed:', err);
       return null;
     }
   }

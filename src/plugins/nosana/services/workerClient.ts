@@ -5,6 +5,10 @@
 const ORCHESTRATOR_USER_ID = '11111111-1111-1111-1111-111111111111';
 const DEFAULT_SERVER_ID = '00000000-0000-0000-0000-000000000000';
 
+/**
+ * Client for communicating with deployed ElizaOS worker agents via their Nosana URLs.
+ * Handles agent discovery, room creation, message sending, and response polling.
+ */
 export class WorkerClient {
   private baseUrl: string;
 
@@ -12,6 +16,14 @@ export class WorkerClient {
     this.baseUrl = url.startsWith('http') ? url : `https://${url}`;
   }
 
+  /**
+   * Wait for the worker's ElizaOS instance to finish booting and respond to API calls.
+   * Polls /api/agents every 5 seconds until an agent with non-initializing status appears.
+   *
+   * @param timeoutMs - Maximum wait time (default: 120s, typical boot: 60-90s)
+   * @returns The agent ID if ready
+   * @throws If worker not ready after timeout
+   */
   async waitForReady(timeoutMs = 120_000): Promise<string> {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
@@ -23,7 +35,7 @@ export class WorkerClient {
           const data = await res.json() as any;
           const agents = data?.agents || data?.data?.agents || [];
           if (agents.length > 0) {
-            console.log(`[WorkerClient] Agent ready at ${this.baseUrl}: ${agents[0].name} (${agents[0].id})`);
+            console.log(`[AgentForge:Worker] Agent ready at ${this.baseUrl}: ${agents[0].name} (${agents[0].id})`);
             return agents[0].id;
           }
         }
@@ -60,14 +72,14 @@ export class WorkerClient {
     inputText: string,
     checkAlive?: () => boolean,
   ): Promise<string> {
-    console.log('[WorkerClient] Researcher mode: waiting up to 90s for web-enriched response...');
+    console.log('[AgentForge:Worker] Researcher mode: waiting up to 90s for web-enriched response...');
     let bestResponse = initialResponse;
     const enrichStart = Date.now();
     const ENRICH_TIMEOUT = 90_000;
 
     while (Date.now() - enrichStart < ENRICH_TIMEOUT) {
       if (checkAlive && !checkAlive()) {
-        console.log('[WorkerClient] Deployment stopped during enrichment wait, using current best');
+        console.log('[AgentForge:Worker] Deployment stopped during enrichment wait, using current best');
         break;
       }
 
@@ -80,7 +92,7 @@ export class WorkerClient {
           if ((m.authorId || m.author_id) === ORCHESTRATOR_USER_ID) continue;
           const c = typeof m.content === 'string' ? m.content : m.content?.text || '';
           if (c.length > bestResponse.length && c !== inputText) {
-            console.log(`[WorkerClient] Found enriched response (${c.length} > ${bestResponse.length} chars)`);
+            console.log(`[AgentForge:Worker] Found enriched response (${c.length} > ${bestResponse.length} chars)`);
             bestResponse = c;
           }
         }
@@ -88,20 +100,20 @@ export class WorkerClient {
 
       // If we found something better after waiting 30s, that's good enough
       if (bestResponse.length > initialResponse.length && Date.now() - enrichStart > 30_000) {
-        console.log('[WorkerClient] Enriched response confirmed after 30s, proceeding');
+        console.log('[AgentForge:Worker] Enriched response confirmed after 30s, proceeding');
         break;
       }
 
       const elapsed = Math.floor((Date.now() - enrichStart) / 1000);
       if (elapsed % 15 === 0 && elapsed > 0) {
-        console.log(`[WorkerClient] Enrichment wait: ${elapsed}s (best: ${bestResponse.length} chars)`);
+        console.log(`[AgentForge:Worker] Enrichment wait: ${elapsed}s (best: ${bestResponse.length} chars)`);
       }
     }
 
     if (bestResponse.length > initialResponse.length) {
-      console.log(`[WorkerClient] Using web-enriched response (${bestResponse.length} chars, +${bestResponse.length - initialResponse.length} from web)`);
+      console.log(`[AgentForge:Worker] Using web-enriched response (${bestResponse.length} chars, +${bestResponse.length - initialResponse.length} from web)`);
     } else {
-      console.log(`[WorkerClient] No enriched response found, using initial (${initialResponse.length} chars)`);
+      console.log(`[AgentForge:Worker] No enriched response found, using initial (${initialResponse.length} chars)`);
     }
 
     return bestResponse;
@@ -156,10 +168,10 @@ export class WorkerClient {
     // 2. Snapshot existing messages so we know what's "old"
     const existingMessages = await this.getChannelMessages(channelId, 10);
     const existingIds = new Set(existingMessages.map((m: any) => m.id));
-    console.log(`[WorkerClient] Channel ${channelId}: ${existingMessages.length} existing messages`);
+    console.log(`[AgentForge:Worker] Channel ${channelId}: ${existingMessages.length} existing messages`);
 
     // 3. Send message with transport:"http" (waits for agent processing)
-    console.log(`[WorkerClient] Sending to ${this.baseUrl} channel=${channelId}`);
+    console.log(`[AgentForge:Worker] Sending to ${this.baseUrl} channel=${channelId}`);
 
     const postBody = JSON.stringify({
       content: text,
@@ -180,11 +192,11 @@ export class WorkerClient {
       });
 
       const rawBody = await msgRes.text();
-      console.log(`[WorkerClient] HTTP response: status=${msgRes.status} body=${rawBody.slice(0, 500)}`);
+      console.log(`[AgentForge:Worker] HTTP response: status=${msgRes.status} body=${rawBody.slice(0, 500)}`);
 
       // Handle 503 (Service Initializing) — wait and retry once
       if (msgRes.status === 503) {
-        console.log('[WorkerClient] HTTP 503 — service initializing, retrying in 10s...');
+        console.log('[AgentForge:Worker] HTTP 503 — service initializing, retrying in 10s...');
         await new Promise(r => setTimeout(r, 10_000));
         try {
           const retryRes = await fetch(`${this.baseUrl}/api/messaging/channels/${channelId}/messages`, {
@@ -201,7 +213,7 @@ export class WorkerClient {
               if (ar) {
                 const responseText = typeof ar === 'string' ? ar : ar.text || ar.content?.text || JSON.stringify(ar);
                 if (responseText && responseText.length > 20 && responseText !== text) {
-                  console.log(`[WorkerClient] Got agentResponse from 503 retry (${responseText.length} chars)`);
+                  console.log(`[AgentForge:Worker] Got agentResponse from 503 retry (${responseText.length} chars)`);
                   if (waitForEnrichment) {
                     return this.waitForEnrichedResponse(channelId, existingIds, responseText, text, checkAlive);
                   }
@@ -211,7 +223,7 @@ export class WorkerClient {
             } catch {}
           }
         } catch (retryErr: any) {
-          console.log(`[WorkerClient] 503 retry also failed: ${retryErr.message}`);
+          console.log(`[AgentForge:Worker] 503 retry also failed: ${retryErr.message}`);
         }
       }
 
@@ -225,7 +237,7 @@ export class WorkerClient {
               ? ar
               : ar.text || ar.content?.text || JSON.stringify(ar);
             if (responseText && responseText.length > 20 && responseText !== text) {
-              console.log(`[WorkerClient] Got agentResponse from HTTP (${responseText.length} chars)`);
+              console.log(`[AgentForge:Worker] Got agentResponse from HTTP (${responseText.length} chars)`);
               if (waitForEnrichment) {
                 return this.waitForEnrichedResponse(channelId, existingIds, responseText, text, checkAlive);
               }
@@ -235,11 +247,11 @@ export class WorkerClient {
         } catch {}
       }
     } catch (err: any) {
-      console.log(`[WorkerClient] HTTP POST error: ${err.message} — will poll for response`);
+      console.log(`[AgentForge:Worker] HTTP POST error: ${err.message} — will poll for response`);
     }
 
     // 4. Fallback: poll channel messages for a new agent response
-    console.log('[WorkerClient] No usable agentResponse in HTTP reply, polling channel...');
+    console.log('[AgentForge:Worker] No usable agentResponse in HTTP reply, polling channel...');
     const pollStart = Date.now();
     const POLL_INTERVAL = 3_000;
 
@@ -266,7 +278,7 @@ export class WorkerClient {
         const responseText = typeof best.content === 'string'
           ? best.content
           : best.content?.text || JSON.stringify(best.content);
-        console.log(`[WorkerClient] Agent responded (poll, ${responseText.length} chars)`);
+        console.log(`[AgentForge:Worker] Agent responded (poll, ${responseText.length} chars)`);
         if (waitForEnrichment) {
           return this.waitForEnrichedResponse(channelId, existingIds, responseText, text, checkAlive);
         }
@@ -275,7 +287,7 @@ export class WorkerClient {
 
       const elapsed = Math.floor((Date.now() - pollStart) / 1000);
       if (elapsed % 15 === 0 && elapsed > 0) {
-        console.log(`[WorkerClient] Waiting for agent response... ${elapsed}s elapsed`);
+        console.log(`[AgentForge:Worker] Waiting for agent response... ${elapsed}s elapsed`);
       }
     }
 

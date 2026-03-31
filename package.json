@@ -11,6 +11,7 @@
     "start": "elizaos start",
     "build:frontend": "cd frontend && npm run build",
     "build": "tsc && cd frontend && npm run build",
+    "test": "npx tsx tests/unit.test.ts",
     "postinstall": "patch-package"
   },
   "dependencies": {
@@ -29,9 +30,5 @@
     "@elizaos/cli": "^1.0.0",
     "concurrently": "^9.2.1",
     "typescript": "^5.0.0"
-  },
-  "patchedDependencies": {
-    "@elizaos/plugin-openai@1.6.0": "patches/@elizaos%2Fplugin-openai@1.6.0.patch",
-    "@ai-sdk/openai@2.0.101": "patches/@ai-sdk%2Fopenai@2.0.101.patch"
   }
 }

@@ -33,7 +33,7 @@ export const deployAgentAction: Action = {
       (text.includes('run') && text.includes('nosana'))
     );
   },
-  handler: async (runtime: any, message: any, _state?: any, _options?: any, callback?: any) => {
+  handler: async (_runtime: any, message: any, _state?: any, _options?: any, callback?: any) => {
     const text = message.content?.text || '';
     const { agentName, gpuQuery, replicas, dockerImage } = extractDeployParams(text);
     const manager = getNosanaManager();

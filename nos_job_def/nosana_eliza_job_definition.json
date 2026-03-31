@@ -2,24 +2,28 @@
   "version": "0.1",
   "type": "container",
   "meta": {
-    "trigger": "cli"
+    "trigger": "cli",
+    "_description": "AgentForge — AI Agent Orchestration on Nosana's decentralized GPU network. Deploys multi-agent DAG pipelines via @nosana/kit SDK. Set NOSANA_API_KEY via deploy.nosana.com/account/ for sub-agent deployment.",
+    "_docker_hub": "https://hub.docker.com/r/drewdockerus/agent-challenge"
   },
   "ops": [
     {
       "type": "container/run",
       "id": "agentforge",
       "args": {
-        "image": "drewdockerus/agentforge:latest",
+        "image": "drewdockerus/agent-challenge:latest",
         "expose": 3000,
         "env": {
           "OPENAI_API_KEY": "nosana",
           "OPENAI_BASE_URL": "https://6vq2bcqphcansrs9b88ztxfs88oqy7etah2ugudytv2x.node.k8s.prd.nos.ci/v1",
+          "OPENAI_API_URL": "https://6vq2bcqphcansrs9b88ztxfs88oqy7etah2ugudytv2x.node.k8s.prd.nos.ci/v1",
           "OPENAI_SMALL_MODEL": "Qwen3.5-27B-AWQ-4bit",
           "OPENAI_LARGE_MODEL": "Qwen3.5-27B-AWQ-4bit",
           "MODEL_NAME": "Qwen3.5-27B-AWQ-4bit",
+          "NOSANA_API_KEY": "$NOSANA_API_KEY",
+          "AGENTFORGE_WORKER_IMAGE": "drewdockerus/agentforge-worker:latest",
           "SERVER_PORT": "3000",
-          "NODE_ENV": "production",
-          "NOSANA_API_KEY": ""
+          "FLEET_API_PORT": "3001"
         }
       }
     }
