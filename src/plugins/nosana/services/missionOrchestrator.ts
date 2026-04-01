@@ -157,93 +157,158 @@ function stepStatusForClient(node: PipelineNode): MissionPipelineState['steps'][
 function buildRootPrompt(task: string, mission?: string, template?: string): string {
   if (template === 'researcher') {
     return [
-      'You are a RESEARCH agent with web search capabilities. Your PRIMARY JOB is to search the web for current information.',
+      'ROLE: You are a RESEARCH SPECIALIST executing a live task on a GPU node.',
+      '',
+      'CRITICAL RULES (violating any of these FAILS the task):',
+      '1. Your ENTIRE response must be the research output itself: facts, data, findings.',
+      '2. Your response must START with "## Key Findings" on the very first line.',
+      '3. If you have web search capabilities, USE THEM NOW before writing.',
+      '4. MINIMUM 600 words of substantive research content.',
       '',
       `TASK: ${task}`,
       '',
-      'CRITICAL INSTRUCTIONS:',
-      '1. FIRST, use your WEB_SEARCH action to find real, current information about this topic',
-      '2. Search for at least 2-3 different queries to get comprehensive results',
-      '3. AFTER searching, compile ALL your findings into a structured research report',
-      '4. Include specific facts, dates, statistics, company names, and URLs from your search results',
-      '5. Do NOT provide a response based only on your training data — the user needs CURRENT web information',
-      '6. Your output will be passed to other agents who will use it to create content',
+      mission ? `MISSION CONTEXT: ${mission}` : '',
       '',
-      'IMPORTANT: Do NOT say "I will research" or "Starting research now" or "Let me look into this". Actually DO the research RIGHT NOW in this response. Provide your complete findings, analysis, and sources in THIS message. Your response IS the deliverable — there is no follow-up. Write at least 500 words of actual research content.',
+      'OUTPUT FORMAT:',
+      'Start with "## Key Findings" and provide:',
+      '- At least 5 specific, detailed findings with concrete data points',
+      '- Source attributions where possible (company names, dates, statistics)',
+      '- Each finding should be 3-5 sentences with specific details',
+      '- End with a "## Summary" section',
       '',
-      mission ? `ORIGINAL MISSION: ${mission}` : '',
+      'FIRST LINE OF YOUR RESPONSE MUST BE: "## Key Findings"',
       '',
-      'SEARCH THE WEB FIRST, THEN PROVIDE YOUR RESEARCH FINDINGS:',
+      'FORBIDDEN (your response will be REJECTED if it contains any of these):',
+      '- "I will research" / "I\'ll search" / "Let me find" / "Let me look into"',
+      '- "I don\'t have access to" / "I cannot browse" / "Starting research now"',
+      '- "[placeholder]" / "[insert]" / "TBD" / "further research needed"',
+      '- Any opening sentence that describes your INTENT rather than presenting FINDINGS',
+      '',
+      'BEGIN YOUR RESEARCH OUTPUT NOW:',
     ].filter(Boolean).join('\n');
   }
 
   return [
-    'You are executing a task. Your ENTIRE response must be the completed work product. Do not acknowledge, plan, or outline — just produce the final result.',
+    'ROLE: You are a specialist executing a task. Your response IS the deliverable.',
+    '',
+    'CRITICAL RULES (violating any of these FAILS the task):',
+    '1. START your response with the actual content. The first word must be part of the deliverable.',
+    '2. Do NOT acknowledge, plan, or outline. Just produce the final result.',
+    '3. MINIMUM 600 words of actual content.',
     '',
     `TASK: ${task}`,
     '',
-    'IMPORTANT: Do NOT say "I will write" or "Starting now" or "Let me help you" or "I\'ll create this". Actually WRITE the complete content RIGHT NOW in this response. Your response IS the final deliverable. Write at least 500 words.',
+    'FORMAT: Start with a markdown heading ("# [Title]") then write the complete content.',
+    'Include specific facts, examples, names, and details.',
+    'Do NOT ask clarifying questions. Execute with your best judgment.',
     '',
-    'INSTRUCTIONS:',
-    '- Provide detailed, substantive content — not a plan or offer to help',
-    '- Include specific facts, examples, names, and details from your knowledge',
-    '- Write at least 500 words of actual content',
-    '- Do NOT ask clarifying questions — just execute with your best judgment',
+    'FIRST LINE OF YOUR RESPONSE MUST BE: "# [Your Title Here]"',
     '',
-    'PROVIDE YOUR COMPLETE OUTPUT NOW:',
-  ].join('\n');
-}
-
-function buildSequentialPrompt(task: string, parentOutput: string): string {
-  return [
-    'You are executing a task. Your ENTIRE response must be the completed work product. Do not acknowledge, plan, or outline — just produce the final result.',
-    '',
-    '=== INPUT FROM PREVIOUS AGENT ===',
-    parentOutput,
-    '=== END INPUT ===',
-    '',
-    `TASK: ${task}`,
-    '',
-    'IMPORTANT: Do NOT say "I will write" or "Starting now" or "Let me help you". Actually WRITE the complete content RIGHT NOW in this response. Your response IS the final deliverable. Write at least 500 words.',
-    '',
-    'INSTRUCTIONS:',
-    '- Use ALL the information above as your source material',
-    '- Do NOT ask for more data — work with what you have',
-    '- Produce a complete, polished output ready for the end user',
-    '- Write at least 500 words of detailed content',
+    'FORBIDDEN (your response will be REJECTED if it contains):',
+    '- "I will write" / "Starting now" / "Let me help" / "I\'ll create"',
+    '- "Sure" / "Of course" / "Absolutely" / "Great question"',
+    '- "[placeholder]" / "[insert]" / "would need to"',
+    '- Any opening that is NOT the deliverable itself',
     '',
     'PRODUCE YOUR COMPLETE OUTPUT NOW:',
   ].join('\n');
 }
 
+function buildSequentialPrompt(task: string, parentOutput: string): string {
+  return [
+    'ROLE: You are a specialist producing a deliverable from source material.',
+    '',
+    'CRITICAL RULES (violating any of these FAILS the task):',
+    '1. START your response with the actual content (title, heading, or opening line).',
+    '2. Do NOT acknowledge the input. Do NOT say "Based on the research provided..."',
+    '3. Do NOT summarize what you received. TRANSFORM it into the deliverable.',
+    '4. MINIMUM 800 words for blog posts/articles, 600 words for scripts, 500 words for analysis.',
+    '',
+    '=== SOURCE MATERIAL ===',
+    parentOutput,
+    '=== END SOURCE MATERIAL ===',
+    '',
+    `TASK: ${task}`,
+    '',
+    'FORMAT:',
+    '- For blog posts/articles: Start with "# [Your Title]" then write the full piece',
+    '- For video scripts: Start with "[INTRO]" then write scene-by-scene',
+    '- For analysis/reports: Start with "## Executive Summary" then structured sections',
+    '- For any other format: Start directly with the content, no preamble',
+    '',
+    'YOUR FIRST LINE must be the title, heading, or opening line of the deliverable.',
+    '',
+    'FORBIDDEN (your response will be REJECTED if it contains):',
+    '- "Based on the research provided" / "Using the input above" / "According to the data"',
+    '- "I will now write" / "Let me create" / "Here is" / "Here\'s"',
+    '- "The previous agent" / "The research shows that" / "Based on"',
+    '- Any meta-commentary about the task, the source material, or your process',
+    '',
+    'PRODUCE THE DELIVERABLE NOW:',
+  ].join('\n');
+}
+
 function buildMergePrompt(task: string, parentOutputs: { name: string; output: string }[]): string {
   const sections = parentOutputs.map((p, i) =>
-    `=== INPUT FROM AGENT "${p.name}" (${i + 1}/${parentOutputs.length}) ===\n${p.output}\n=== END ===`
+    `=== SOURCE ${i + 1} of ${parentOutputs.length} ===\n${p.output}\n=== END SOURCE ${i + 1} ===`
   ).join('\n\n');
 
   return [
-    'You are executing a task. Your ENTIRE response must be the completed work product. Do not acknowledge, plan, or outline — just produce the final result.',
+    'ROLE: You are a SENIOR EDITOR producing a final deliverable from multiple source documents.',
+    '',
+    'CRITICAL RULES (violating any of these FAILS the task):',
+    '1. Your response IS the final document. No preamble. No commentary.',
+    '2. START with "# [Compelling Title]" on the very first line.',
+    '3. MERGE and ENHANCE the sources. Do NOT just concatenate them.',
+    '4. The reader must NEVER know this was assembled from multiple sources.',
+    '5. MINIMUM 1000 words.',
     '',
     sections,
     '',
     `TASK: ${task}`,
     '',
-    'IMPORTANT: Produce the COMPLETE report RIGHT NOW in this response. Include: (1) Executive Summary, (2) Feature Comparison Table in markdown, (3) Strengths & Weaknesses for each, (4) Market Positioning, (5) Recommendation. Write at least 800 words. Do NOT say "I will analyze" — just DO IT.',
+    'STRUCTURE YOUR DOCUMENT AS:',
+    '1. # Title (compelling, specific to the topic)',
+    '2. ## Executive Summary (2-3 sentences capturing the key insight)',
+    '3. ## Main sections organized by THEME (not by source)',
+    '4. Include a markdown comparison table if comparing items',
+    '5. ## Key Takeaways (3-5 bullet points)',
+    '6. ## Recommendation or Conclusion',
     '',
-    'INSTRUCTIONS:',
-    '- Use ALL the inputs provided above — do not ignore any',
-    '- Combine, synthesize, and integrate the information',
-    '- Produce a cohesive, unified output with markdown headers and tables',
-    '- If inputs overlap, merge them intelligently',
-    '- If inputs complement each other, weave them together',
-    '- Do NOT summarize what you will do — DO IT NOW in this response',
+    'YOUR FIRST LINE MUST BE: "# [Compelling Title Related to the Topic]"',
     '',
-    'PRODUCE YOUR COMBINED OUTPUT NOW:',
+    'ABSOLUTE PROHIBITION (these make your response FAIL):',
+    '- "I have analyzed" / "I\'ll now synthesize" / "Let me integrate"',
+    '- "Source 1 provides" / "Source 2 covers" or ANY reference to sources by number',
+    '- "The following document" / "This report will" / "In this analysis"',
+    '- ANY reference to "agents", "inputs", "sources", "pipeline", or the assembly process',
+    '- ANY sentence starting with "I" followed by a verb describing your editorial process',
+    '- ANY meta-commentary about what you are about to do or have done',
+    '',
+    'WRITE THE FINAL DOCUMENT NOW:',
   ].join('\n');
 }
 
 function buildFallbackPrompt(task: string, missionText: string): string {
-  return `The previous agent was unavailable. Complete this mission using your own knowledge. Your ENTIRE response must be the completed work product — do not acknowledge, plan, or outline.\n\nMISSION: ${missionText}\nTASK: ${task}\n\nIMPORTANT: Do NOT say "I will" or "Let me". Produce the COMPLETE, detailed result RIGHT NOW. Write at least 500 words. Execute the task NOW:`;
+  return [
+    'ROLE: You are a specialist executing a task independently using your own knowledge.',
+    '',
+    'CRITICAL RULES:',
+    '1. START with the actual content (heading or first finding). No preamble.',
+    '2. Do NOT mention limitations, apologize, or explain constraints.',
+    '3. Produce the BEST deliverable you can with your training knowledge.',
+    '4. MINIMUM 600 words.',
+    '',
+    `TASK: ${task}`,
+    '',
+    `MISSION CONTEXT: ${missionText}`,
+    '',
+    'FIRST LINE must be a heading ("# [Title]") or key finding. No meta-commentary.',
+    '',
+    'FORBIDDEN: "I will" / "Let me" / "I don\'t have access" / "Unfortunately"',
+    '',
+    'PRODUCE YOUR COMPLETE OUTPUT NOW:',
+  ].join('\n');
 }
 
 // ── Orchestrator ─────────────────────────────────────────
@@ -270,12 +335,31 @@ export class MissionOrchestrator {
           messages: [
             {
               role: 'system',
-              content: `You are a pipeline planner. Output a JSON array of agents needed.
-Templates: researcher (web search), analyst (analysis), writer (content), publisher (social media)
-Rules: dependsOn:-1=first step, dependsOn:0=depends on step 0, dependsOn:[1,2]=depends on both. Multiple steps with same dependsOn run in PARALLEL. Max 5 steps.
-Example: "Research X and write a blog post AND YouTube script"
-[{"template":"researcher","name":"Researcher","task":"Research X thoroughly","dependsOn":-1},{"template":"writer","name":"Blog-Writer","task":"Write blog post","dependsOn":0},{"template":"writer","name":"Script-Writer","task":"Write YouTube script","dependsOn":0},{"template":"analyst","name":"Editor","task":"Review and merge outputs","dependsOn":[1,2]}]
-JSON array only, no markdown:`,
+              content: `You are a pipeline planner. Given a user mission, output ONLY a JSON array. No markdown fences. No explanation. No text before or after the array.
+
+Each object in the array: {"template":"...","name":"...","task":"...","dependsOn":N}
+
+TEMPLATE values: "researcher" (web search), "analyst" (analysis/comparison), "writer" (content creation)
+
+DEPENDENCY rules:
+- dependsOn: -1 means first step (no dependencies)
+- dependsOn: 0 means depends on step at index 0
+- dependsOn: [1,2] means depends on steps 1 AND 2
+- Steps with the same dependsOn value run in PARALLEL
+- Max 5 steps total
+
+TASK field rules (CRITICAL for output quality):
+- For researchers: "Find at least 5 specific facts with dates, numbers, and company names about [topic]."
+- For writers: "Write an 800-word [format] with title, introduction, 3 detailed sections, and conclusion about [topic]."
+- For analysts: "Produce a structured analysis with executive summary, comparison table, key findings, and recommendations about [topic]."
+- Be SPECIFIC. Vague tasks produce vague outputs.
+
+NAME field: short PascalCase (e.g. "AIResearcher", "BlogWriter", "CompetitiveAnalyst")
+
+Example for "Research X and write a blog post AND YouTube script":
+[{"template":"researcher","name":"Researcher","task":"Research X thoroughly. Find at least 5 specific facts with dates, numbers, and sources.","dependsOn":-1},{"template":"writer","name":"BlogWriter","task":"Write an 800-word blog post with title, intro, 3 sections, conclusion.","dependsOn":0},{"template":"writer","name":"ScriptWriter","task":"Write a YouTube video script with intro hook, 3 segments, and call-to-action.","dependsOn":0},{"template":"analyst","name":"Editor","task":"Merge both outputs into one polished document with executive summary.","dependsOn":[1,2]}]
+
+Respond with ONLY the JSON array:`,
             },
             { role: 'user', content: mission },
           ],
