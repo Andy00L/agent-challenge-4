@@ -68,19 +68,25 @@ export const nosanaPlugin: Plugin = {
         const markets = await manager.getMarkets();
         console.log('[AgentForge:Plugin] Available GPU markets:');
         markets.forEach(m => console.log(`[AgentForge:Plugin]   ${m.name} (${m.gpu}): ${m.address} — $${m.pricePerHour}/hr`));
-      } catch {}
+      } catch (e) {
+        console.warn('[AgentForge:Plugin] Failed to fetch markets:', e);
+      }
       try {
         const creds = await manager.getCreditsBalance();
         if (creds) console.log(`[AgentForge:Plugin] Credits available: $${creds.balance.toFixed(2)}`);
-      } catch {}
+      } catch (e) {
+        console.warn('[AgentForge:Plugin] Failed to fetch credits:', e);
+      }
     }
 
     // Start standalone fleet API server (ElizaOS doesn't execute side-effect imports)
     const { default: express } = await import('express');
     const { default: cors } = await import('cors');
     const app = express();
-    app.use(cors());
-    app.use(express.json());
+    app.use(cors({
+      origin: process.env.CORS_ORIGIN || true, // restrict in production via CORS_ORIGIN env var
+    }));
+    app.use(express.json({ limit: '1mb' }));
     app.get('/fleet', async (_req: any, res: any) => {
       const manager = getNosanaManager();
       const status = await manager.getFleetStatus();
@@ -132,8 +138,8 @@ export const nosanaPlugin: Plugin = {
         },
         dag: {
           totalSteps: stepsArr.length,
-          depthLevels: Math.max(...stepsArr.map((s: any) => (s.depth ?? 0)), 0) + 1,
-          maxParallel: Math.max(...stepsArr.map((s: any) => (s.parallelCount ?? 1)), 1),
+          depthLevels: stepsArr.length > 0 ? Math.max(...stepsArr.map((s: any) => (s.depth ?? 0)), 0) + 1 : 0,
+          maxParallel: stepsArr.length > 0 ? Math.max(...stepsArr.map((s: any) => (s.parallelCount ?? 1)), 1) : 0,
         },
         nosana: {
           gpuMarketsUsed: [...new Set(stepsArr.map((s: any) => s.market).filter(Boolean))],
@@ -143,7 +149,8 @@ export const nosanaPlugin: Plugin = {
     });
     app.post('/fleet/mission/execute', async (req: any, res: any) => {
       const { mission } = req.body || {};
-      if (!mission) { res.status(400).json({ error: 'Missing mission in body' }); return; }
+      if (!mission || typeof mission !== 'string') { res.status(400).json({ error: 'Missing or invalid mission in body' }); return; }
+      if (mission.length > 10_000) { res.status(400).json({ error: 'Mission text too long (max 10,000 characters)' }); return; }
       const state = getPipelineState();
       if (state.status !== 'idle' && state.status !== 'complete' && state.status !== 'error') {
         res.status(409).json({ error: 'Mission already in progress', currentStatus: state.status });
@@ -175,7 +182,7 @@ export const nosanaPlugin: Plugin = {
       if (!dep) { res.status(404).json({ error: 'Deployment not found' }); return; }
       if (!dep.url) { res.json({ status: 'no_url', messages: [], agentName: dep.name }); return; }
 
-      const baseUrl = dep.url.startsWith('http') ? dep.url : `https://${dep.url}`;
+      const baseUrl = (dep.url.startsWith('https://') || dep.url.startsWith('http://')) ? dep.url : `https://${dep.url}`;
       try {
         const agentsRes = await fetch(`${baseUrl}/api/agents`, { signal: AbortSignal.timeout(5000) });
         if (!agentsRes.ok) { res.json({ status: 'unreachable', messages: [], agentName: dep.name }); return; }
@@ -202,10 +209,14 @@ export const nosanaPlugin: Plugin = {
                     timestamp: m.createdAt || new Date().toISOString(),
                   })));
                 }
-              } catch {}
+              } catch (e) {
+                console.warn(`[AgentForge:FleetAPI] Failed to fetch room messages:`, e);
+              }
             }
           }
-        } catch {}
+        } catch (e) {
+          console.warn(`[AgentForge:FleetAPI] Failed to fetch rooms:`, e);
+        }
 
         messages.sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
         res.json({
@@ -215,7 +226,8 @@ export const nosanaPlugin: Plugin = {
           messages: messages.slice(0, 20),
           url: baseUrl,
         });
-      } catch {
+      } catch (e) {
+        console.warn(`[AgentForge:FleetAPI] Activity fetch failed for ${dep.name}:`, e);
         res.json({ status: 'unreachable', messages: [], agentName: dep.name, url: baseUrl });
       }
     });
@@ -242,12 +254,12 @@ export const nosanaPlugin: Plugin = {
 
     // Test embedding availability at boot (log once)
     try {
-      const baseUrl = process.env.OPENAI_BASE_URL || process.env.OPENAI_API_URL || '';
+      const baseUrl = process.env.OPENAI_API_URL || '';
       if (baseUrl) {
         const res = await fetch(`${baseUrl}/embeddings`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.OPENAI_API_KEY || 'nosana'}` },
-          body: JSON.stringify({ input: 'test', model: process.env.OPENAI_SMALL_MODEL || 'Qwen3.5-27B-AWQ-4bit' }),
+          body: JSON.stringify({ input: 'test', model: process.env.MODEL_NAME || 'Qwen3.5-27B-AWQ-4bit' }),
           signal: AbortSignal.timeout(5000),
         });
         if (!res.ok) {

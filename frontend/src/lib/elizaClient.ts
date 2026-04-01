@@ -19,10 +19,12 @@ export interface ChannelMessage {
 }
 
 // Persistent user ID stored in localStorage
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function getOrCreateUserId(): string {
   const KEY = 'agentforge-user-id';
   let id = localStorage.getItem(KEY);
-  if (!id) {
+  if (!id || !UUID_RE.test(id)) {
     id = crypto.randomUUID();
     localStorage.setItem(KEY, id);
   }

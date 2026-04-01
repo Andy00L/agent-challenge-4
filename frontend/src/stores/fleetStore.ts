@@ -72,6 +72,8 @@ export const useFleetStore = create<FleetStore>((set) => ({
           },
         }));
       }
-    } catch {}
+    } catch (e) {
+      console.warn(`[FleetStore] Failed to fetch activity for ${deploymentId}:`, e);
+    }
   },
 }));

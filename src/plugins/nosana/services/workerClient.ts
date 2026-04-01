@@ -13,7 +13,12 @@ export class WorkerClient {
   private baseUrl: string;
 
   constructor(url: string) {
-    this.baseUrl = url.startsWith('http') ? url : `https://${url}`;
+    // Validate URL protocol — only allow http/https
+    if (url.startsWith('https://') || url.startsWith('http://')) {
+      this.baseUrl = url;
+    } else {
+      this.baseUrl = `https://${url}`;
+    }
   }
 
   /**
@@ -39,7 +44,9 @@ export class WorkerClient {
             return agents[0].id;
           }
         }
-      } catch {}
+      } catch (e) {
+        // Expected during boot — agent not yet available
+      }
       await new Promise(r => setTimeout(r, 5000));
     }
     throw new Error(`Worker at ${this.baseUrl} not ready after ${timeoutMs / 1000}s`);
@@ -96,7 +103,9 @@ export class WorkerClient {
             bestResponse = c;
           }
         }
-      } catch {}
+      } catch (e) {
+        console.warn('[AgentForge:Worker] Error polling for enriched response:', e);
+      }
 
       // If we found something better after waiting 30s, that's good enough
       if (bestResponse.length > initialResponse.length && Date.now() - enrichStart > 30_000) {
@@ -220,7 +229,9 @@ export class WorkerClient {
                   return responseText;
                 }
               }
-            } catch {}
+            } catch (parseErr) {
+              console.warn('[AgentForge:Worker] Failed to parse 503 retry response:', parseErr);
+            }
           }
         } catch (retryErr: any) {
           console.log(`[AgentForge:Worker] 503 retry also failed: ${retryErr.message}`);
@@ -244,7 +255,9 @@ export class WorkerClient {
               return responseText;
             }
           }
-        } catch {}
+        } catch (parseErr) {
+          console.warn('[AgentForge:Worker] Failed to parse HTTP response body:', parseErr);
+        }
       }
     } catch (err: any) {
       console.log(`[AgentForge:Worker] HTTP POST error: ${err.message} — will poll for response`);

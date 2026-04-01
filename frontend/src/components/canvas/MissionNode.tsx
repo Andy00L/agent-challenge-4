@@ -33,32 +33,32 @@ const TEMPLATE_ICONS: Record<string, string> = {
   output: '\u{1F4E6}',
 };
 
-const STATUS_STYLES: Record<string, { border: string; bg: string; anim: string }> = {
-  pending:    { border: 'border-zinc-700/60',   bg: 'bg-zinc-900/80',     anim: '' },
-  deploying:  { border: 'border-amber-600/60',  bg: 'bg-amber-950/20',    anim: 'animate-node-pulse' },
-  deployed:   { border: 'border-blue-800/60',   bg: 'bg-blue-950/20',     anim: '' },
-  ready:      { border: 'border-blue-600/60',   bg: 'bg-blue-950/25',     anim: '' },
-  queued:     { border: 'border-amber-600/60',  bg: 'bg-amber-950/20',    anim: 'animate-node-pulse' },
-  processing: { border: 'border-blue-500/60',   bg: 'bg-blue-950/30',     anim: 'animate-node-glow' },
-  complete:   { border: 'border-green-600/60',  bg: 'bg-green-950/20',    anim: 'node-complete-pop' },
-  error:      { border: 'border-red-600/60',    bg: 'bg-red-950/20',      anim: '' },
-  stopped:    { border: 'border-zinc-600/40',   bg: 'bg-zinc-900/40',     anim: 'opacity-60' },
-  mission:    { border: 'border-violet-600/60', bg: 'bg-violet-950/20',   anim: '' },
-  output:     { border: 'border-indigo-600/60', bg: 'bg-indigo-950/20',   anim: '' },
+const STATUS_STYLES: Record<string, { accent: string; bg: string; anim: string }> = {
+  pending:    { accent: 'border-l-[3px] border-l-gray-300',       bg: 'bg-white',    anim: '' },
+  deploying:  { accent: 'border-l-[3px] border-l-amber-400',      bg: 'bg-white',    anim: 'animate-node-pulse' },
+  deployed:   { accent: 'border-l-[3px] border-l-blue-400',       bg: 'bg-white',    anim: '' },
+  ready:      { accent: 'border-l-[3px] border-l-blue-400',       bg: 'bg-white',    anim: '' },
+  queued:     { accent: 'border-l-[3px] border-l-amber-400',      bg: 'bg-white',    anim: 'animate-node-pulse' },
+  processing: { accent: 'border-l-[3px] border-l-blue-500',       bg: 'bg-white',    anim: 'animate-node-glow' },
+  complete:   { accent: 'border-l-[3px] border-l-green-500',      bg: 'bg-white',    anim: 'node-complete-pop' },
+  error:      { accent: 'border-l-[3px] border-l-red-500',        bg: 'bg-white',    anim: '' },
+  stopped:    { accent: 'border-l-[3px] border-l-gray-300',       bg: 'bg-white',    anim: 'opacity-60' },
+  mission:    { accent: 'border-l-[3px] border-l-foreground',     bg: 'bg-white',    anim: '' },
+  output:     { accent: 'border-l-[3px] border-l-foreground',     bg: 'bg-white',    anim: '' },
 };
 
 const DOT_COLORS: Record<string, string> = {
-  pending:    'bg-zinc-500',
-  deploying:  'bg-amber-400 animate-pulse ring-2 ring-amber-400/30',
+  pending:    'bg-gray-300',
+  deploying:  'bg-amber-400 animate-pulse',
   deployed:   'bg-blue-400',
-  ready:      'bg-blue-400 ring-2 ring-blue-400/20',
-  queued:     'bg-amber-400 animate-pulse ring-2 ring-amber-400/30',
-  processing: 'bg-blue-500 animate-ping ring-2 ring-blue-500/30',
-  complete:   'bg-green-400 ring-2 ring-green-400/20',
-  error:      'bg-red-400 ring-2 ring-red-400/20',
-  stopped:    'bg-zinc-500',
-  mission:    'bg-violet-400',
-  output:     'bg-indigo-400',
+  ready:      'bg-blue-400',
+  queued:     'bg-amber-400 animate-pulse',
+  processing: 'bg-blue-500 animate-pulse',
+  complete:   'bg-green-500',
+  error:      'bg-red-500',
+  stopped:    'bg-gray-400',
+  mission:    'bg-foreground',
+  output:     'bg-foreground',
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -82,80 +82,80 @@ function MissionNodeComponent({ data }: NodeProps) {
 
   return (
     <Card
-      className={`min-w-[200px] max-w-[220px] ${style.border} ${style.bg} ${style.anim} shadow-lg transition-all ${d.hasOutput ? 'cursor-pointer hover:brightness-110' : ''} ${d.isSelected ? 'ring-2 ring-violet-500 ring-offset-2 ring-offset-zinc-950' : ''}`}
+      className={`min-w-[180px] max-w-[220px] ${style.accent} ${style.bg} ${style.anim} shadow-sm transition-all duration-250 ${d.hasOutput ? 'cursor-pointer hover:shadow-md hover:-translate-y-0.5' : ''} ${d.isSelected ? 'ring-2 ring-primary ring-offset-2 ring-offset-background shadow-md' : ''}`}
     ><CardContent className="p-4 relative">
       {/* Status dot */}
-      <div className={`absolute top-3 right-3 w-2.5 h-2.5 rounded-full ${dot}`} />
+      <div className={`absolute top-3 right-3 w-2 h-2 rounded-full ${dot}`} />
 
       {/* Handles */}
       {!d.isFirst && (
         <Handle
           type="target"
           position={Position.Left}
-          style={{ width: 10, height: 10, background: '#7c3aed', border: '2px solid #09090b' }}
+          style={{ width: 10, height: 10, background: '#D1CBC3', border: '2px solid white' }}
         />
       )}
       {!d.isLast && (
         <Handle
           type="source"
           position={Position.Right}
-          style={{ width: 10, height: 10, background: '#7c3aed', border: '2px solid #09090b' }}
+          style={{ width: 10, height: 10, background: '#D1CBC3', border: '2px solid white' }}
         />
       )}
 
       {/* Icon + name */}
       <div className="flex items-center gap-2 mb-2">
         <span className="text-lg">{TEMPLATE_ICONS[d.template] || TEMPLATE_ICONS.custom}</span>
-        <span className="text-sm font-semibold text-zinc-100 truncate">{d.label}</span>
+        <span className="text-sm font-semibold text-foreground truncate">{d.label}</span>
       </div>
 
       {/* Status */}
-      <Badge variant="secondary" className="text-[10px] mb-2">
+      <Badge variant="secondary" className="text-[10px] uppercase tracking-wider font-semibold mb-2">
         {st === 'deploying' && d.queuedSince ? 'Queued for GPU...' : (STATUS_LABELS[st] || st)}
       </Badge>
 
       {/* Mission text (for mission node) */}
       {st === 'mission' && d.missionText && (
-        <p className="text-xs text-zinc-400 line-clamp-3">{d.missionText}</p>
+        <p className="text-xs text-muted-foreground line-clamp-3 mt-1">{d.missionText}</p>
       )}
 
       {/* Task (for agent nodes) */}
       {st !== 'mission' && st !== 'output' && d.task && (
-        <p className="text-xs text-zinc-500 line-clamp-2 mb-2">{d.task}</p>
+        <p className="text-xs text-muted-foreground line-clamp-2 mb-2">{d.task}</p>
       )}
 
       {/* Market + cost */}
       {d.market && (st === 'deployed' || st === 'ready' || st === 'processing' || st === 'complete') && (
-        <div className="text-[10px] text-zinc-600 mb-1">
+        <div className="text-[10px] text-muted-foreground font-mono mb-1">
           {d.market} {d.costPerHour != null && `\u00B7 $${d.costPerHour.toFixed(3)}/hr`}
         </div>
       )}
 
       {/* Output preview */}
       {st === 'complete' && d.outputPreview && (
-        <div className="mt-2 pt-2 border-t border-zinc-700/30">
-          <p className="text-xs text-zinc-400 line-clamp-3">{d.outputPreview}</p>
+        <div className="mt-2 pt-2 border-t">
+          <p className="text-xs text-muted-foreground line-clamp-3 italic">{d.outputPreview}</p>
         </div>
       )}
 
       {/* Final output (for output node) */}
       {st === 'output' && d.finalOutput && (
         <div className="mt-1">
-          <p className="text-xs text-zinc-400 line-clamp-4">{d.finalOutput}</p>
+          <p className="text-xs text-muted-foreground line-clamp-4">{d.finalOutput}</p>
         </div>
       )}
 
       {/* Error */}
       {st === 'error' && d.error && (
-        <div className="mt-2 pt-2 border-t border-red-900/50">
-          <p className="text-xs text-red-400 line-clamp-2">{d.error}</p>
+        <div className="mt-2 pt-2 border-t border-red-200">
+          <p className="text-xs text-red-600 line-clamp-2">{d.error}</p>
         </div>
       )}
 
       {/* Click hint for completed nodes */}
       {d.hasOutput && !d.isSelected && (
-        <div className="mt-2 pt-2 border-t border-zinc-700/30 text-center">
-          <span className="text-[10px] text-violet-400/70 hover:text-violet-400">Click to view output &#x2192;</span>
+        <div className="mt-2 pt-2 border-t text-center">
+          <span className="text-[10px] font-medium text-blue-600 hover:underline">Click to view output &#x2192;</span>
         </div>
       )}
     </CardContent></Card>

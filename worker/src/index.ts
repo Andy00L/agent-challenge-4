@@ -1,3 +1,12 @@
+// LLM Variable Alias — map canonical vars to ElizaOS expected names
+if (process.env.OPENAI_API_URL) {
+  process.env.OPENAI_BASE_URL = process.env.OPENAI_API_URL;
+}
+if (process.env.MODEL_NAME) {
+  process.env.OPENAI_SMALL_MODEL = process.env.MODEL_NAME;
+  process.env.OPENAI_LARGE_MODEL = process.env.MODEL_NAME;
+}
+
 // AgentForge Worker — dynamically configured ElizaOS agent
 // All configuration comes from environment variables set by the Nosana job definition
 
@@ -50,7 +59,7 @@ const character = {
     post: [],
   },
   settings: {
-    model: process.env.OPENAI_SMALL_MODEL || process.env.MODEL_NAME || 'Qwen3.5-27B-AWQ-4bit',
+    model: process.env.MODEL_NAME || 'Qwen3.5-27B-AWQ-4bit',
   },
 };
 

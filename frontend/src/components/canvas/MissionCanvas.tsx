@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -13,6 +13,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
+import { RotateCcw } from 'lucide-react';
 import { MissionNode } from './MissionNode';
 import { OutputPanel } from './OutputPanel';
 import { NodeOutputPanel } from './NodeOutputPanel';
@@ -22,15 +23,13 @@ import { useMissionStore, type PipelineStep, type PipelineStatus } from '../../s
 
 const nodeTypes = { missionNode: MissionNode };
 
-// ── DAG helper ───────────────────────────────────────────
-
+// -- DAG helper ---
 function getDeps(step: PipelineStep): string[] {
   if (!step.dependsOn) return [];
   return Array.isArray(step.dependsOn) ? step.dependsOn : [step.dependsOn];
 }
 
-// ── Edge helpers ─────────────────────────────────────────
-
+// -- Edge helpers ---
 function getEdgeClassName(sourceStatus?: string, targetStatus?: string): string {
   if (sourceStatus === 'processing' || targetStatus === 'processing') return 'edge-processing';
   if (sourceStatus === 'deploying' || targetStatus === 'deploying') return 'edge-deploying';
@@ -39,11 +38,11 @@ function getEdgeClassName(sourceStatus?: string, targetStatus?: string): string 
 }
 
 function getEdgeStrokeColor(sourceStatus?: string, targetStatus?: string): string {
-  if (sourceStatus === 'processing' || targetStatus === 'processing') return '#6366f1';
+  if (sourceStatus === 'processing' || targetStatus === 'processing') return '#3B82F6';
   if (sourceStatus === 'deploying' || targetStatus === 'deploying') return '#f59e0b';
   if (sourceStatus === 'complete') return '#22c55e';
   if (sourceStatus === 'error' || targetStatus === 'error') return '#ef4444';
-  return '#3f3f46';
+  return '#D1CBC3';
 }
 
 function getEdgeWidth(sourceStatus?: string, targetStatus?: string): number {
@@ -52,14 +51,15 @@ function getEdgeWidth(sourceStatus?: string, targetStatus?: string): number {
   return 1.5;
 }
 
-// ── StatusBar ────────────────────────────────────────────
-
-function StatusBar({ status, startedAt, completedAt, steps, onNewMission }: {
+// -- StatusBar ---
+function StatusBar({ status, startedAt, completedAt, steps, onNewMission, hasManualMoves, onResetLayout }: {
   status: PipelineStatus;
   startedAt: number | null;
   completedAt: number | null;
   steps: PipelineStep[];
   onNewMission: () => void;
+  hasManualMoves?: boolean;
+  onResetLayout?: () => void;
 }) {
   const [elapsed, setElapsed] = useState(0);
   const [tick, setTick] = useState(0);
@@ -122,41 +122,50 @@ function StatusBar({ status, startedAt, completedAt, steps, onNewMission }: {
   const timeStr = mins > 0 ? `${mins}m ${String(secs).padStart(2, '0')}s` : `${secs}s`;
 
   const dotClass =
-    status === 'complete' ? 'bg-green-400' :
-    status === 'error' ? 'bg-red-400' :
-    'bg-blue-400 animate-pulse';
+    status === 'complete' ? 'bg-green-500' :
+    status === 'error' ? 'bg-red-500' :
+    'bg-blue-500 animate-pulse';
 
   return (
-    <div className="flex items-center justify-between px-4 py-2 border-b border-zinc-800/60 bg-zinc-900/60 text-xs shrink-0 overflow-hidden">
-      <div className="flex items-center gap-3 min-w-0 overflow-hidden">
+    <div className="flex items-center justify-between px-5 py-3 border-b bg-white/90 backdrop-blur-sm shadow-xs text-xs shrink-0 overflow-hidden">
+      <div className="flex items-center gap-4 min-w-0 overflow-hidden">
         {/* Status */}
-        <Badge variant={status === 'complete' ? 'default' : status === 'error' ? 'destructive' : 'secondary'} className="gap-1.5 whitespace-nowrap shrink-0">
+        <Badge variant={status === 'complete' ? 'default' : status === 'error' ? 'destructive' : 'secondary'} className="gap-1.5 whitespace-nowrap shrink-0 font-semibold">
           <span className={`w-2 h-2 rounded-full ${dotClass}`} />
           {statusLabel}
         </Badge>
 
         {/* Timer */}
-        <span className="text-zinc-500 cost-counter whitespace-nowrap shrink-0">{timeStr}</span>
+        <span className="text-muted-foreground cost-counter whitespace-nowrap shrink-0">{timeStr}</span>
 
         {/* Live cost */}
         {totalCostPerHr > 0 && (
-          <Badge variant="outline" className="cost-counter whitespace-nowrap shrink-0">
+          <Badge variant="outline" className="cost-counter whitespace-nowrap shrink-0 font-semibold">
             ${activeCost.toFixed(4)} {status === 'complete' ? 'total' : 'spent'}
           </Badge>
         )}
 
         {/* Active agents count */}
         {activeAgentCount > 0 && status !== 'complete' && status !== 'error' && (
-          <span className="text-zinc-500 whitespace-nowrap shrink-0">
+          <span className="text-muted-foreground whitespace-nowrap shrink-0">
             {activeAgentCount} agent{activeAgentCount > 1 ? 's' : ''} on Nosana
           </span>
         )}
       </div>
 
-      <div className="flex items-center gap-3 text-zinc-500 shrink-0 ml-3">
-        <span className="whitespace-nowrap">{completedCount}/{steps.length} complete</span>
+      <div className="flex items-center gap-3 text-muted-foreground shrink-0 ml-4">
+        <span className="whitespace-nowrap font-medium">{completedCount}/{steps.length} complete</span>
+        {hasManualMoves && onResetLayout && (
+          <button
+            onClick={onResetLayout}
+            className="flex items-center gap-1.5 border border-[var(--border-default)] rounded-lg px-3 py-1.5 text-sm font-medium hover:bg-[var(--bg-hover)] transition-colors"
+          >
+            <RotateCcw className="w-3 h-3" />
+            Reset Layout
+          </button>
+        )}
         {status !== 'planning' && (
-          <Button variant="outline" size="sm" onClick={async () => {
+          <Button variant="outline" size="sm" className="hover:shadow-xs transition-all duration-150" onClick={async () => {
               try {
                 const res = await fetch('/fleet/mission/export');
                 if (!res.ok) return;
@@ -168,13 +177,15 @@ function StatusBar({ status, startedAt, completedAt, steps, onNewMission }: {
                 a.download = `agentforge-pipeline-${data.pipeline?.id || Date.now()}.json`;
                 a.click();
                 URL.revokeObjectURL(url);
-              } catch {}
+              } catch (e) {
+                console.warn('[MissionCanvas] Export failed:', e);
+              }
             }}>
             Export
           </Button>
         )}
         {(status === 'complete' || status === 'error') && (
-          <Button variant="ghost" size="sm" onClick={onNewMission}>
+          <Button size="sm" className="shadow-sm hover:shadow-md hover:-translate-y-px active:translate-y-0 transition-all duration-200" onClick={onNewMission}>
             New Mission
           </Button>
         )}
@@ -183,16 +194,15 @@ function StatusBar({ status, startedAt, completedAt, steps, onNewMission }: {
   );
 }
 
-// ── Idle state ───────────────────────────────────────────
-
+// -- Idle state ---
 function IdleState() {
   return (
-    <div className="h-full bg-zinc-950 relative">
+    <div className="h-full bg-muted/40 relative">
       {/* Background dots for aesthetics */}
-      <div className="absolute inset-0 opacity-20">
+      <div className="absolute inset-0 opacity-60">
         <svg width="100%" height="100%">
           <pattern id="dots" x="0" y="0" width="20" height="20" patternUnits="userSpaceOnUse">
-            <circle cx="1" cy="1" r="1" fill="#333" />
+            <circle cx="1" cy="1" r="1.5" fill="#D1CBC3" />
           </pattern>
           <rect width="100%" height="100%" fill="url(#dots)" />
         </svg>
@@ -201,30 +211,30 @@ function IdleState() {
       <div className="absolute inset-0 flex flex-col items-center justify-center z-10">
         <div className="text-center max-w-md">
           {/* Logo */}
-          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-600/20 to-indigo-500/20 border border-violet-500/20 flex items-center justify-center mx-auto mb-6">
+          <div className="w-16 h-16 rounded-2xl bg-muted border flex items-center justify-center mx-auto mb-6 shadow-sm">
             <span className="text-3xl">&#x26A1;</span>
           </div>
 
-          <h2 className="text-lg font-semibold text-zinc-300 mb-2">
+          <h2 className="text-xl font-bold text-foreground mb-2 tracking-tight">
             Ready to orchestrate
           </h2>
-          <p className="text-sm text-zinc-500 mb-8 leading-relaxed">
+          <p className="text-sm text-muted-foreground mb-8 leading-relaxed">
             Type a mission in the chat to deploy AI agents across
             Nosana's decentralized GPU network. Watch them work in real-time on this canvas.
           </p>
 
           {/* Mini pipeline illustration */}
-          <div className="flex items-center justify-center gap-3 opacity-40">
-            <div className="w-20 h-10 rounded-lg border border-zinc-700 flex items-center justify-center bg-zinc-900/50">
-              <span className="text-[10px] text-zinc-500">&#x1F50D; Research</span>
+          <div className="flex items-center justify-center gap-3 opacity-50">
+            <div className="w-20 h-10 rounded-lg border flex items-center justify-center bg-white shadow-xs">
+              <span className="text-[10px] text-muted-foreground">&#x1F50D; Research</span>
             </div>
-            <svg width="24" height="12" className="text-zinc-600"><path d="M0 6h18m-4-4l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.5"/></svg>
-            <div className="w-20 h-10 rounded-lg border border-zinc-700 flex items-center justify-center bg-zinc-900/50">
-              <span className="text-[10px] text-zinc-500">&#x270D;&#xFE0F; Write</span>
+            <svg width="24" height="12" className="text-border"><path d="M0 6h18m-4-4l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.5"/></svg>
+            <div className="w-20 h-10 rounded-lg border flex items-center justify-center bg-white shadow-xs">
+              <span className="text-[10px] text-muted-foreground">&#x270D;&#xFE0F; Write</span>
             </div>
-            <svg width="24" height="12" className="text-zinc-600"><path d="M0 6h18m-4-4l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.5"/></svg>
-            <div className="w-20 h-10 rounded-lg border border-zinc-700 flex items-center justify-center bg-zinc-900/50">
-              <span className="text-[10px] text-zinc-500">&#x1F4E6; Output</span>
+            <svg width="24" height="12" className="text-border"><path d="M0 6h18m-4-4l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.5"/></svg>
+            <div className="w-20 h-10 rounded-lg border flex items-center justify-center bg-white shadow-xs">
+              <span className="text-[10px] text-muted-foreground">&#x1F4E6; Output</span>
             </div>
           </div>
         </div>
@@ -233,7 +243,7 @@ function IdleState() {
   );
 }
 
-// ── Canvas inner (requires ReactFlowProvider) ────────────
+// -- Canvas inner (requires ReactFlowProvider) ---
 
 const SPACING_X = 350;
 const SPACING_Y = 220;
@@ -241,14 +251,17 @@ const BASE_X = 0;
 const CENTER_Y = 0;
 
 function MissionCanvasInner() {
-  const { steps, status, mission, finalOutput, startedAt, completedAt } = useMissionStore();
+  const { steps, status, mission, finalOutput, startedAt, completedAt, pipelineId } = useMissionStore();
   const [showOutput, setShowOutput] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [hasManualMoves, setHasManualMoves] = useState(false);
   const { fitView } = useReactFlow();
+  const manuallyMoved = useRef<Set<string>>(new Set());
+  const prevPipelineIdRef = useRef<string | null>(null);
 
   const handleNewMission = async () => {
     useMissionStore.getState().reset();
-    try { await fetch('/fleet/mission/reset', { method: 'POST' }); } catch {}
+    try { await fetch('/fleet/mission/reset', { method: 'POST' }); } catch (e) { console.warn('[MissionCanvas] Reset failed:', e); }
   };
 
   // Auto-show output panel when mission completes
@@ -262,6 +275,15 @@ function MissionCanvasInner() {
     if (showOutput) setSelectedNodeId(null);
   }, [showOutput]);
 
+  // Reset manually moved nodes when a new mission starts
+  useEffect(() => {
+    if (pipelineId && pipelineId !== prevPipelineIdRef.current) {
+      manuallyMoved.current.clear();
+      setHasManualMoves(false);
+    }
+    prevPipelineIdRef.current = pipelineId;
+  }, [pipelineId]);
+
   const selectedStep = selectedNodeId ? steps.find(s => s.id === selectedNodeId) : null;
 
   // Build ReactFlow nodes + edges from pipeline steps (DAG-aware)
@@ -273,7 +295,7 @@ function MissionCanvasInner() {
     const allNodes: Node[] = [];
     const allEdges: Edge[] = [];
 
-    // ── Mission node ──
+    // -- Mission node --
     allNodes.push({
       id: 'mission',
       type: 'missionNode',
@@ -289,7 +311,7 @@ function MissionCanvasInner() {
       },
     });
 
-    // ── Agent step nodes ──
+    // -- Agent step nodes --
     const maxDepth = Math.max(...steps.map(s => s.depth ?? 0), 0);
 
     steps.forEach((step, i) => {
@@ -322,7 +344,7 @@ function MissionCanvasInner() {
         },
       });
 
-      // ── Edges based on dependsOn ──
+      // -- Edges based on dependsOn --
       const deps = getDeps(step);
       if (deps.length === 0) {
         const isProcessing = step.status === 'processing' || step.status === 'deploying';
@@ -361,7 +383,7 @@ function MissionCanvasInner() {
       }
     });
 
-    // ── Output node ──
+    // -- Output node --
     if (steps.length > 0) {
       const outputX = BASE_X + (maxDepth + 2) * SPACING_X;
       const outputStatus = status === 'complete' ? 'output' : 'pending';
@@ -396,8 +418,8 @@ function MissionCanvasInner() {
           className: status === 'complete' ? 'edge-complete' : isFlowing ? 'edge-processing' : '',
           style: {
             stroke: status === 'complete' ? '#22c55e'
-              : leaf.status === 'complete' ? '#6366f1'
-              : '#3f3f46',
+              : leaf.status === 'complete' ? '#3B82F6'
+              : '#D1CBC3',
             strokeWidth: status === 'complete' ? 2 : isFlowing ? 2.5 : 1.5,
             opacity: 0.8,
           },
@@ -411,8 +433,40 @@ function MissionCanvasInner() {
   const [nodes, setNodes, onNodesChange] = useNodesState(rfNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(rfEdges);
 
-  useEffect(() => {
+  // Track user drag — mark node as manually moved when drag ends
+  const handleNodesChange = useCallback(
+    (changes: Parameters<typeof onNodesChange>[0]) => {
+      for (const c of changes) {
+        if (c.type === 'position' && (c as any).dragging === false && (c as any).position) {
+          manuallyMoved.current.add(c.id);
+          setHasManualMoves(true);
+        }
+      }
+      onNodesChange(changes);
+    },
+    [onNodesChange]
+  );
+
+  // Reset layout: clear manual positions and re-apply auto-layout
+  const handleResetLayout = useCallback(() => {
+    manuallyMoved.current.clear();
+    setHasManualMoves(false);
     setNodes(rfNodes);
+    setTimeout(() => fitView({ padding: 0.15, duration: 400 }), 50);
+  }, [rfNodes, setNodes, fitView]);
+
+  // Sync computed layout → ReactFlow state, preserving manually dragged positions
+  useEffect(() => {
+    setNodes(currentNodes => {
+      const currentPos = new Map(currentNodes.map(n => [n.id, n.position]));
+      return rfNodes.map(n => {
+        const pos = currentPos.get(n.id);
+        if (manuallyMoved.current.has(n.id) && pos) {
+          return { ...n, position: pos };
+        }
+        return n;
+      });
+    });
     setEdges(rfEdges);
   }, [rfNodes, rfEdges, setNodes, setEdges]);
 
@@ -424,7 +478,7 @@ function MissionCanvasInner() {
   }, [rfNodes.length, showOutput, selectedStep, fitView]);
 
   return (
-    <div className="relative flex h-full bg-zinc-950">
+    <div className="relative flex h-full bg-background">
       <div className="flex-1 flex flex-col min-w-0">
         <StatusBar
           status={status}
@@ -432,22 +486,22 @@ function MissionCanvasInner() {
           completedAt={completedAt}
           steps={steps}
           onNewMission={handleNewMission}
+          hasManualMoves={hasManualMoves}
+          onResetLayout={handleResetLayout}
         />
         <div className="flex-1 relative">
           <ReactFlow
             nodes={nodes}
             edges={edges}
-            onNodesChange={onNodesChange}
+            onNodesChange={handleNodesChange}
             onEdgesChange={onEdgesChange}
             nodeTypes={nodeTypes}
             onNodeClick={(_e, node) => {
-              // Clicking the Output node toggles the final OutputPanel
               if (node.id === 'output' && finalOutput) {
                 setShowOutput(prev => !prev);
                 setSelectedNodeId(null);
                 return;
               }
-              // Clicking a step node opens its individual output
               const step = steps.find(s => s.id === node.id);
               if (step?.output || step?.error) {
                 setShowOutput(false);
@@ -458,17 +512,16 @@ function MissionCanvasInner() {
             fitView
             fitViewOptions={{ padding: 0.15 }}
             proOptions={{ hideAttribution: true }}
-            nodesDraggable={false}
+            nodesDraggable
             nodesConnectable={false}
             elementsSelectable={false}
             minZoom={0.3}
             maxZoom={1.5}
           >
-            <Background variant={BackgroundVariant.Dots} color="#333" gap={20} />
+            <Background variant={BackgroundVariant.Dots} color="#C5C0B8" gap={20} size={1.5} />
             <Controls position="bottom-left" />
           </ReactFlow>
 
-          {/* Overlay panels — positioned absolute so they don't push the canvas */}
           {selectedStep && !showOutput && (
             <NodeOutputPanel step={selectedStep} onClose={() => setSelectedNodeId(null)} />
           )}
@@ -489,7 +542,7 @@ function MissionCanvasInner() {
   );
 }
 
-// ── Exported wrapper ─────────────────────────────────────
+// -- Exported wrapper ---
 
 export function MissionCanvas() {
   const status = useMissionStore(s => s.status);

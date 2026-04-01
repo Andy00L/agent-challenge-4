@@ -29,6 +29,9 @@ function extractParams(text: string) {
       agentName = `${AGENT_TEMPLATES[template].name}-${Date.now().toString(36).slice(-4)}`;
     }
   }
+  // Sanitize agent name: only allow alphanumeric, hyphens, underscores, spaces
+  agentName = agentName.replace(/[^a-zA-Z0-9 _-]/g, '').trim().slice(0, 50);
+  if (!agentName) agentName = `Agent-${Date.now().toString(36).slice(-4)}`;
 
   // Detect GPU preference from text (optional)
   let gpuQuery: string | null = null;
@@ -97,11 +100,11 @@ export const createAgentFromTemplateAction: Action = {
           AGENT_SYSTEM_PROMPT: tmpl.defaultPrompt,
           AGENT_PLUGINS: tmpl.plugins.join(','),
           OPENAI_API_KEY: process.env.OPENAI_API_KEY || 'nosana',
-          OPENAI_BASE_URL: process.env.OPENAI_BASE_URL || process.env.OPENAI_API_URL || '',
-          OPENAI_API_URL: process.env.OPENAI_BASE_URL || process.env.OPENAI_API_URL || '',
-          OPENAI_SMALL_MODEL: process.env.OPENAI_SMALL_MODEL || process.env.MODEL_NAME || 'Qwen3.5-27B-AWQ-4bit',
-          OPENAI_LARGE_MODEL: process.env.OPENAI_LARGE_MODEL || process.env.MODEL_NAME || 'Qwen3.5-27B-AWQ-4bit',
-          MODEL_NAME: process.env.MODEL_NAME || process.env.OPENAI_SMALL_MODEL || 'Qwen3.5-27B-AWQ-4bit',
+          OPENAI_API_URL: process.env.OPENAI_API_URL || '',
+          OPENAI_BASE_URL: process.env.OPENAI_API_URL || '',
+          MODEL_NAME: process.env.MODEL_NAME || 'Qwen3.5-27B-AWQ-4bit',
+          OPENAI_SMALL_MODEL: process.env.MODEL_NAME || 'Qwen3.5-27B-AWQ-4bit',
+          OPENAI_LARGE_MODEL: process.env.MODEL_NAME || 'Qwen3.5-27B-AWQ-4bit',
           TAVILY_API_KEY: process.env.TAVILY_API_KEY || '',
           SERVER_PORT: '3000',
         },

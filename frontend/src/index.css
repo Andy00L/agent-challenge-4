@@ -6,79 +6,87 @@
 @custom-variant dark (&:is(.dark *));
 
 /* ============================================
-   AgentForge Design System
+   AgentForge Premium Design System v2
+   Light theme — layered shadows, warm neutrals
    ============================================ */
 
 :root {
-  /* Surfaces (3 depth levels) */
-  --surface-0: #09090b;      /* zinc-950 — page background */
-  --surface-1: #18181b;      /* zinc-900 — panels, cards */
-  --surface-2: #27272a80;    /* zinc-800/50 — elevated cards, hover */
-  --surface-3: #3f3f4640;    /* zinc-700/25 — active states */
-
-  /* Accent (Nosana purple → indigo) */
-  --accent-primary: #7c3aed;
-  --accent-secondary: #6366f1;
-  --accent-glow: #7c3aed30;
-  --accent-subtle: #7c3aed15;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --background: #FAFAF8;
+  --foreground: #201E1A;
+  --card: #FFFFFF;
+  --card-foreground: #201E1A;
+  --popover: #FFFFFF;
+  --popover-foreground: #201E1A;
+  --primary: #201E1A;
+  --primary-foreground: #FFFFFF;
+  --secondary: #F3F1ED;
+  --secondary-foreground: #201E1A;
+  --muted: #F3F1ED;
+  --muted-foreground: #6B6560;
+  --accent: #F3F1ED;
+  --accent-foreground: #201E1A;
+  --destructive: #EF4444;
+  --border: #E3DFD9;
+  --input: #E3DFD9;
+  --ring: #201E1A;
+  --chart-1: #201E1A;
+  --chart-2: #6B6560;
+  --chart-3: #9C9690;
+  --chart-4: #D1CBC3;
+  --chart-5: #E3DFD9;
+  --radius: 0.75rem;
+  --sidebar: #FFFFFF;
+  --sidebar-foreground: #201E1A;
+  --sidebar-primary: #201E1A;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #F3F1ED;
+  --sidebar-accent-foreground: #201E1A;
+  --sidebar-border: #E3DFD9;
+  --sidebar-ring: #201E1A;
 }
 
 /* Global base */
 body {
-  background: var(--surface-0);
-  color: #e4e4e7;
+  background: var(--background);
+  color: var(--foreground);
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 /* ============================================
-   Scrollbar — slim, themed
+   Premium scrollbar
    ============================================ */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #52525b; }
+::-webkit-scrollbar-thumb { background: hsl(30 10% 80%); border-radius: 9999px; }
+::-webkit-scrollbar-thumb:hover { background: hsl(30 10% 65%); }
+
+/* ============================================
+   Reduced motion
+   ============================================ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
 
 /* ============================================
    ReactFlow overrides
    ============================================ */
-.react-flow__background { opacity: 0.4 !important; }
-.react-flow__controls { background: var(--surface-1) !important; border: 1px solid #3f3f46 !important; border-radius: 8px !important; }
-.react-flow__controls button { background: transparent !important; border-bottom-color: #3f3f46 !important; color: #a1a1aa !important; }
-.react-flow__controls button:hover { background: var(--surface-2) !important; color: #e4e4e7 !important; }
-.react-flow__controls-button { fill: #a1a1aa !important; }
-.react-flow__controls-button:hover { fill: #e4e4e7 !important; }
+.react-flow__background { opacity: 0.35 !important; }
+.react-flow__controls {
+  background: #FFFFFF !important;
+  border: 1px solid #E3DFD9 !important;
+  border-radius: 10px !important;
+  box-shadow: 0 1px 2px rgba(73,63,54,0.06), 0 2px 4px rgba(73,63,54,0.08) !important;
+}
+.react-flow__controls button { background: transparent !important; border-bottom-color: #E3DFD9 !important; color: #9C9690 !important; }
+.react-flow__controls button:hover { background: #F3F1ED !important; color: #201E1A !important; }
+.react-flow__controls-button { fill: #9C9690 !important; }
+.react-flow__controls-button:hover { fill: #201E1A !important; }
 
 /* ============================================
    Canvas Edge Animations
@@ -87,8 +95,8 @@ body {
   to { stroke-dashoffset: -20; }
 }
 @keyframes edge-glow-pulse {
-  0%, 100% { filter: drop-shadow(0 0 2px var(--accent-primary)); opacity: 0.7; }
-  50% { filter: drop-shadow(0 0 8px var(--accent-primary)); opacity: 1; }
+  0%, 100% { filter: drop-shadow(0 0 2px #3B82F6); opacity: 0.7; }
+  50% { filter: drop-shadow(0 0 6px #3B82F6); opacity: 1; }
 }
 
 .react-flow__edge-path { transition: stroke 0.5s ease, stroke-width 0.3s ease, filter 0.5s ease; }
@@ -96,31 +104,31 @@ body {
 .react-flow__edge.edge-processing .react-flow__edge-path {
   stroke-dasharray: 8 4;
   animation: dash-flow 0.8s linear infinite;
-  filter: drop-shadow(0 0 6px rgba(99, 102, 241, 0.6));
+  filter: drop-shadow(0 0 4px rgba(59, 130, 246, 0.4));
 }
 .react-flow__edge.edge-complete .react-flow__edge-path {
-  filter: drop-shadow(0 0 3px rgba(34, 197, 94, 0.4));
+  filter: drop-shadow(0 0 2px rgba(34, 197, 94, 0.3));
 }
 .react-flow__edge.edge-deploying .react-flow__edge-path {
   stroke-dasharray: 12 6;
   animation: dash-flow 1.2s linear infinite;
-  filter: drop-shadow(0 0 4px rgba(245, 158, 11, 0.4));
+  filter: drop-shadow(0 0 3px rgba(245, 158, 11, 0.3));
 }
 
 /* ============================================
    Node Animations
    ============================================ */
 @keyframes node-glow {
-  0%, 100% { box-shadow: 0 0 8px rgba(59, 130, 246, 0.3); }
-  50% { box-shadow: 0 0 20px rgba(59, 130, 246, 0.5), 0 0 40px rgba(59, 130, 246, 0.2); }
+  0%, 100% { box-shadow: 0 0 8px rgba(59, 130, 246, 0.15); }
+  50% { box-shadow: 0 0 16px rgba(59, 130, 246, 0.3), 0 0 32px rgba(59, 130, 246, 0.1); }
 }
 @keyframes node-glow-enhanced {
-  0%, 100% { box-shadow: 0 0 15px 0 rgba(59, 130, 246, 0.3), 0 0 30px 0 rgba(59, 130, 246, 0.1); }
-  50% { box-shadow: 0 0 25px 5px rgba(59, 130, 246, 0.5), 0 0 50px 10px rgba(59, 130, 246, 0.2); }
+  0%, 100% { box-shadow: 0 0 12px 0 rgba(59, 130, 246, 0.15), 0 0 24px 0 rgba(59, 130, 246, 0.06); }
+  50% { box-shadow: 0 0 20px 4px rgba(59, 130, 246, 0.3), 0 0 40px 8px rgba(59, 130, 246, 0.12); }
 }
 @keyframes node-deploy-pulse {
-  0%, 100% { box-shadow: 0 0 8px rgba(245, 158, 11, 0.2); }
-  50% { box-shadow: 0 0 16px rgba(245, 158, 11, 0.4); }
+  0%, 100% { box-shadow: 0 0 6px rgba(245, 158, 11, 0.1); }
+  50% { box-shadow: 0 0 12px rgba(245, 158, 11, 0.25); }
 }
 @keyframes node-pulse {
   0%, 100% { opacity: 1; }
@@ -142,46 +150,30 @@ body {
 
 .animate-node-pulse { animation: node-deploy-pulse 1.5s ease-in-out infinite; }
 .animate-node-glow { animation: node-glow-enhanced 2s ease-in-out infinite; }
-.animate-slide-in-right { animation: slide-in-right 0.3s ease-out forwards; }
-.node-complete-pop { animation: complete-pop 0.4s ease-out; }
-.fade-in-up { animation: fade-in-up 0.25s ease-out; }
+.animate-slide-in-right { animation: slide-in-right 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+.node-complete-pop { animation: complete-pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.fade-in-up { animation: fade-in-up 0.25s cubic-bezier(0.16, 1, 0.3, 1); }
 
 /* ============================================
-   Glass morphism utility
-   ============================================ */
-.glass-panel {
-  background: rgba(24, 24, 27, 0.9);
-  backdrop-filter: blur(12px);
-  border: 1px solid rgba(63, 63, 70, 0.5);
-}
-
-/* ============================================
-   Accent gradient border
-   ============================================ */
-.accent-border-bottom {
-  border-bottom: 1px solid transparent;
-  border-image: linear-gradient(90deg, transparent 0%, #7c3aed 30%, #6366f1 70%, transparent 100%) 1;
-}
-
-/* ============================================
-   Mission template card hover
+   Template card hover (premium lift)
    ============================================ */
 .template-card {
-  transition: all 0.2s ease;
-  border: 1px solid #3f3f46;
-  background: var(--surface-1);
+  transition: all 250ms cubic-bezier(0.16, 1, 0.3, 1);
+  border: 1px solid #E3DFD9;
+  background: #FFFFFF;
+  box-shadow: 0 1px 2px rgba(73, 63, 54, 0.06);
 }
 .template-card:hover {
-  border-color: #7c3aed60;
-  background: var(--surface-2);
-  box-shadow: 0 0 20px rgba(124, 58, 237, 0.08);
-  transform: translateY(-1px);
+  border-color: #D1CBC3;
+  background: #FFFFFF;
+  box-shadow: 0 2px 4px rgba(73,63,54,0.04), 0 4px 8px rgba(73,63,54,0.06), 0 8px 16px rgba(73,63,54,0.04);
+  transform: translateY(-2px);
 }
 
 /* ============================================
    Chat message animation
    ============================================ */
-.message-enter { animation: fade-in-up 0.25s ease-out; }
+.message-enter { animation: fade-in-up 0.25s cubic-bezier(0.16, 1, 0.3, 1); }
 
 /* ============================================
    Tabular numbers for cost counters
@@ -193,7 +185,16 @@ body {
 
 @theme inline {
   --font-heading: var(--font-sans);
-  --font-sans: 'Geist Variable', sans-serif;
+  --font-sans: 'Inter', 'Geist Variable', system-ui, sans-serif;
+
+  /* Layered warm-tinted shadows */
+  --shadow-2xs: 0 1px rgba(73, 63, 54, 0.05);
+  --shadow-xs: 0 1px 2px rgba(73, 63, 54, 0.06);
+  --shadow-sm: 0 1px 2px rgba(73, 63, 54, 0.06), 0 2px 4px rgba(73, 63, 54, 0.08);
+  --shadow-md: 0 2px 4px rgba(73, 63, 54, 0.04), 0 4px 8px rgba(73, 63, 54, 0.06), 0 8px 16px rgba(73, 63, 54, 0.04);
+  --shadow-lg: 0 4px 6px rgba(73, 63, 54, 0.03), 0 8px 15px rgba(73, 63, 54, 0.05), 0 16px 30px rgba(73, 63, 54, 0.06);
+  --shadow-xl: 0 8px 10px rgba(73, 63, 54, 0.03), 0 16px 24px rgba(73, 63, 54, 0.05), 0 24px 48px rgba(73, 63, 54, 0.07);
+
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -232,40 +233,6 @@ body {
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
-}
-
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
 }
 
 @layer base {

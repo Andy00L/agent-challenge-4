@@ -93,10 +93,12 @@ export function ChatPanel() {
   const missionStatus = useMissionStore(s => s.status);
   const isMissionActive = missionStatus === 'deploying' || missionStatus === 'executing' || missionStatus === 'planning';
   const [history, setHistory] = useState<MissionHistoryEntry[]>([]);
+  const [timeoutWarning, setTimeoutWarning] = useState(false);
+  const responseReceivedRef = useRef(false);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isMissionActive]);
+  }, [messages, isMissionActive, timeoutWarning]);
 
   // Poll mission history
   useEffect(() => {
@@ -107,7 +109,9 @@ export function ChatPanel() {
         const ct = res.headers.get('content-type') ?? '';
         if (!ct.includes('application/json')) return;
         setHistory(await res.json());
-      } catch {}
+      } catch {
+        // Expected during initial load or when backend is starting
+      }
     };
     fetchHistory();
     const id = setInterval(fetchHistory, 10_000);
@@ -165,6 +169,8 @@ export function ChatPanel() {
     const unsub = onAgentMessage((msg) => {
       const text = msg.content;
       if (isInternalMessage(text)) return;
+      responseReceivedRef.current = true;
+      setTimeoutWarning(false);
       addMessage({ role: 'assistant', text });
       setLoading(false);
       setTimeout(pollFleetOnce, 500);
@@ -188,10 +194,15 @@ export function ChatPanel() {
       }
 
       sendSocketMessage(channelId, msg, agentId);
+      responseReceivedRef.current = false;
+      setTimeoutWarning(false);
 
       setTimeout(() => {
-        setLoading(false);
-      }, 60_000);
+        if (!responseReceivedRef.current) {
+          setTimeoutWarning(true);
+          setLoading(false);
+        }
+      }, 30_000);
     } catch (err: any) {
       addMessage({ role: 'assistant', text: `Error: ${err.message || 'Something went wrong'}` });
       setLoading(false);
@@ -213,14 +224,14 @@ export function ChatPanel() {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center gap-3 px-5 py-3 border-b border-zinc-800/60 bg-zinc-900/60">
+      <div className="flex items-center gap-3 px-5 py-4 border-b bg-white">
         <div className="relative">
-          <img src="/assets/thinker.png" alt="AgentForge" className="w-9 h-9 rounded-full object-cover ring-2 ring-zinc-800" />
-          <div className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ${statusDotColor} border-2 border-zinc-900`} />
+          <img src="/assets/thinker.png" alt="AgentForge" className="w-10 h-10 rounded-full object-cover border-2 border-border shadow-sm" />
+          <div className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ${statusDotColor} border-2 border-white`} />
         </div>
         <div>
-          <div className="text-sm font-semibold text-zinc-100">AgentForge Chat</div>
-          <div className="text-[11px] text-zinc-500">
+          <div className="text-base font-semibold text-foreground">AgentForge Chat</div>
+          <div className="text-xs text-muted-foreground">
             {status === 'connected' ? 'Connected' : status === 'connecting' ? 'Connecting...' : 'Disconnected'}
           </div>
         </div>
@@ -228,22 +239,22 @@ export function ChatPanel() {
 
       {/* Mission History */}
       {history.length > 0 && (
-        <div className="px-4 py-2 border-b border-zinc-800/40 bg-zinc-900/30">
-          <div className="text-[11px] font-medium text-zinc-600 uppercase tracking-wider mb-1">Recent Missions</div>
+        <div className="px-4 py-2.5 border-b bg-muted">
+          <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-widest mb-1.5">Recent Missions</div>
           <div className="space-y-0.5 max-h-28 overflow-y-auto">
             {history.slice(0, 5).map((h) => (
               <button
                 key={h.id}
                 onClick={() => handleSend(h.mission)}
-                className="w-full text-left px-2 py-1 rounded hover:bg-zinc-800/50 transition-colors group flex items-center justify-between"
+                className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-background transition-colors duration-150 group flex items-center justify-between"
               >
-                <span className="text-xs text-zinc-400 group-hover:text-zinc-200 truncate flex-1 mr-2">
+                <span className="text-sm text-foreground group-hover:text-foreground truncate flex-1 mr-2">
                   {h.mission?.slice(0, 45)}{h.mission?.length > 45 ? '...' : ''}
                 </span>
-                <div className="flex items-center gap-2 shrink-0 text-[11px] text-zinc-600">
+                <div className="flex items-center gap-2 shrink-0 text-xs text-muted-foreground">
                   <span>{h.stepsCount}x</span>
                   <span>{Math.round((h.totalTime || 0) / 1000)}s</span>
-                  <span className={h.status === 'complete' ? 'text-green-500' : 'text-red-500'}>
+                  <span className={h.status === 'complete' ? 'text-green-600' : 'text-red-500'}>
                     {h.status === 'complete' ? '\u2713' : '\u2717'}
                   </span>
                 </div>
@@ -254,34 +265,34 @@ export function ChatPanel() {
       )}
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+      <div className="flex-1 overflow-y-auto px-4 py-5 space-y-4">
         {errorMsg && (
-          <div className="text-center text-sm text-red-400 bg-red-950/30 rounded-lg px-4 py-3 border border-red-800/30">
+          <div className="text-center text-sm text-red-700 bg-red-50 rounded-xl px-4 py-3 border border-red-200 shadow-xs">
             {errorMsg}. Make sure ElizaOS is running on port 3000.
           </div>
         )}
 
         {messages.length === 0 && !errorMsg && (
-          <div className="flex flex-col items-center justify-center h-full gap-5 text-center px-4">
-            <img src="/assets/thinker.png" alt="AgentForge" className="w-14 h-14 rounded-full object-cover ring-2 ring-zinc-800" />
+          <div className="flex flex-col items-center justify-center h-full gap-6 text-center px-4">
+            <img src="/assets/thinker.png" alt="AgentForge" className="w-16 h-16 rounded-full object-cover border-2 border-border shadow-md" />
             <div>
-              <h2 className="text-lg font-semibold text-zinc-200 mb-1">What do you want to build?</h2>
-              <p className="text-xs text-zinc-500">Choose a template or type your own mission</p>
+              <h2 className="text-xl font-bold text-foreground mb-1.5 tracking-tight">What do you want to build?</h2>
+              <p className="text-sm text-muted-foreground">Choose a template or type your own mission</p>
             </div>
-            <div className="grid grid-cols-1 gap-2.5 w-full max-w-md">
+            <div className="grid grid-cols-1 gap-3 w-full max-w-md">
               {MISSION_TEMPLATES.map((t) => (
-                <Card key={t.id} className="cursor-pointer hover:bg-accent/50 transition-colors group template-card" onClick={() => handleSend(t.prompt)}>
-                  <CardContent className="p-3">
+                <Card key={t.id} className="cursor-pointer group template-card !py-0" onClick={() => handleSend(t.prompt)}>
+                  <CardContent className="p-4">
                     <div className="flex items-start gap-3">
-                      <span className="text-xl mt-0.5 group-hover:scale-110 transition-transform">{t.icon}</span>
+                      <span className="text-xl mt-0.5 group-hover:scale-110 transition-transform duration-200">{t.icon}</span>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
-                          <span className="text-sm font-medium text-zinc-200">{t.title}</span>
+                          <span className="text-sm font-semibold text-foreground">{t.title}</span>
                           <Badge variant="secondary" className="text-[10px]">
                             {t.badge}
                           </Badge>
                         </div>
-                        <p className="text-xs text-zinc-500">{t.description}</p>
+                        <p className="text-xs text-muted-foreground leading-relaxed">{t.description}</p>
                       </div>
                     </div>
                   </CardContent>
@@ -292,15 +303,15 @@ export function ChatPanel() {
         )}
 
         {messages.map((msg) => (
-          <div key={msg.id} className={`flex message-enter ${msg.role === 'user' ? 'justify-end' : 'justify-start items-start gap-2'}`}>
+          <div key={msg.id} className={`flex message-enter ${msg.role === 'user' ? 'justify-end' : 'justify-start items-start gap-2.5'}`}>
             {msg.role === 'assistant' && (
-              <Avatar className="w-7 h-7 shrink-0 mt-0.5"><AvatarFallback className="bg-primary/10 text-primary text-[10px]">AF</AvatarFallback></Avatar>
+              <Avatar className="w-8 h-8 shrink-0 mt-0.5"><AvatarFallback className="bg-muted text-muted-foreground text-[10px] border border-border">AF</AvatarFallback></Avatar>
             )}
             <div
-              className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
+              className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
                 msg.role === 'user'
-                  ? 'bg-primary text-primary-foreground whitespace-pre-wrap'
-                  : 'bg-muted border'
+                  ? 'bg-primary text-primary-foreground rounded-br-md shadow-sm whitespace-pre-wrap'
+                  : 'bg-muted border rounded-bl-md shadow-xs'
               }`}
             >
               {msg.role === 'user' ? (
@@ -313,24 +324,31 @@ export function ChatPanel() {
         ))}
 
         {isLoading && (
-          <div className="flex justify-start message-enter">
-            <div className="bg-zinc-800/80 border border-zinc-700/30 rounded-2xl px-4 py-3 flex items-center gap-2">
-              <Loader2 className="w-4 h-4 animate-spin text-violet-400" />
-              <span className="text-sm text-zinc-400">Thinking...</span>
+          <div className="flex justify-start items-start gap-2.5 message-enter">
+            <Avatar className="w-8 h-8 shrink-0 mt-0.5"><AvatarFallback className="bg-muted text-muted-foreground text-[10px] border border-border">AF</AvatarFallback></Avatar>
+            <div className="bg-muted border rounded-2xl rounded-bl-md px-4 py-3 flex items-center gap-2 shadow-xs">
+              <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+              <span className="text-sm text-muted-foreground">Thinking...</span>
             </div>
           </div>
         )}
 
         {isMissionActive && (
-          <div className="flex items-center gap-2 px-3 py-2.5 bg-violet-950/20 border border-violet-800/20 rounded-lg message-enter">
+          <div className="flex items-center gap-2.5 px-4 py-3 bg-blue-50 border border-blue-200 rounded-xl shadow-xs message-enter">
             <div className="flex gap-1">
-              <span className="w-1.5 h-1.5 bg-violet-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-              <span className="w-1.5 h-1.5 bg-violet-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-              <span className="w-1.5 h-1.5 bg-violet-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+              <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+              <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+              <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
             </div>
-            <span className="text-xs text-violet-300">
+            <span className="text-sm text-blue-700">
               Mission in progress — watch the <strong>Mission Canvas</strong> tab for live updates
             </span>
+          </div>
+        )}
+
+        {timeoutWarning && (
+          <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl px-4 py-3 text-sm leading-relaxed shadow-xs message-enter">
+            The AI model couldn't process this request. The message may be too long, or the inference endpoint may be temporarily unavailable. Try a shorter message or try again later.
           </div>
         )}
 
@@ -338,8 +356,8 @@ export function ChatPanel() {
       </div>
 
       {/* Input */}
-      <div className="px-4 py-3 border-t bg-card/40">
-        <div className="flex items-center gap-2 bg-zinc-800/50 rounded-xl px-4 py-2 border border-zinc-700/40 focus-within:border-violet-500/50 focus-within:ring-2 focus-within:ring-violet-500/20 transition-all">
+      <div className="px-4 py-4 border-t bg-white">
+        <div className="flex items-center gap-2.5 bg-muted rounded-xl px-4 py-2.5 border focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/15 transition-all duration-200">
           <Input
             ref={inputRef}
             type="text"
@@ -347,10 +365,10 @@ export function ChatPanel() {
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Type a mission or ask AgentForge anything..."
-            className="flex-1 bg-transparent border-0 outline-none text-sm text-zinc-200 placeholder-zinc-600 focus-visible:ring-0 focus-visible:border-0 h-auto py-0"
+            className="flex-1 bg-transparent border-0 outline-none text-sm text-foreground placeholder-muted-foreground/60 focus-visible:ring-0 focus-visible:border-0 h-auto py-0"
             disabled={isLoading}
           />
-          <Button size="icon" onClick={() => handleSend()} disabled={!input.trim() || isLoading} className="shrink-0">
+          <Button size="icon" onClick={() => handleSend()} disabled={!input.trim() || isLoading} className="shrink-0 w-9 h-9 rounded-xl shadow-sm hover:shadow-md hover:-translate-y-px active:translate-y-0 active:shadow-sm transition-all duration-200">
             <Send className="w-4 h-4" />
           </Button>
         </div>

@@ -60,6 +60,7 @@ export const actionEventHandlers: PluginEvents = {
       const startTime = startTimes.get(key) || Date.now();
       const durationMs = Date.now() - startTime;
       startTimes.delete(key);
+      pruneStaleStartTimes();
 
       metrics.push({
         action: actionName,

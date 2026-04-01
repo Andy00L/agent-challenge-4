@@ -16,7 +16,15 @@ function extractDeployParams(text: string) {
   const replicas = replicaMatch ? parseInt(replicaMatch[1], 10) : 1;
 
   const imageMatch = text.match(/image[:\s]+["']?([^\s"']+)/i);
-  const dockerImage = imageMatch ? imageMatch[1] : (process.env.AGENTFORGE_WORKER_IMAGE || 'drewdockerus/agentforge-worker:latest');
+  let dockerImage = process.env.AGENTFORGE_WORKER_IMAGE || 'drewdockerus/agentforge-worker:latest';
+  if (imageMatch) {
+    // Validate Docker image name: alphanumeric, dots, hyphens, slashes, underscores, colons
+    const candidate = imageMatch[1];
+    if (/^[a-zA-Z0-9][a-zA-Z0-9._\-/]{0,255}(?::[a-zA-Z0-9._\-]{1,128})?$/.test(candidate)) {
+      dockerImage = candidate;
+    }
+    // else: silently fall back to default image (reject invalid input)
+  }
 
   return { agentName, gpuQuery, replicas, dockerImage };
 }
@@ -53,11 +61,11 @@ export const deployAgentAction: Action = {
         dockerImage,
         env: {
           OPENAI_API_KEY: process.env.OPENAI_API_KEY || 'nosana',
-          OPENAI_BASE_URL: process.env.OPENAI_BASE_URL || process.env.OPENAI_API_URL || '',
-          OPENAI_API_URL: process.env.OPENAI_BASE_URL || process.env.OPENAI_API_URL || '',
-          OPENAI_SMALL_MODEL: process.env.OPENAI_SMALL_MODEL || process.env.MODEL_NAME || 'Qwen3.5-27B-AWQ-4bit',
-          OPENAI_LARGE_MODEL: process.env.OPENAI_LARGE_MODEL || process.env.MODEL_NAME || 'Qwen3.5-27B-AWQ-4bit',
-          MODEL_NAME: process.env.MODEL_NAME || process.env.OPENAI_SMALL_MODEL || 'Qwen3.5-27B-AWQ-4bit',
+          OPENAI_API_URL: process.env.OPENAI_API_URL || '',
+          OPENAI_BASE_URL: process.env.OPENAI_API_URL || '',
+          MODEL_NAME: process.env.MODEL_NAME || 'Qwen3.5-27B-AWQ-4bit',
+          OPENAI_SMALL_MODEL: process.env.MODEL_NAME || 'Qwen3.5-27B-AWQ-4bit',
+          OPENAI_LARGE_MODEL: process.env.MODEL_NAME || 'Qwen3.5-27B-AWQ-4bit',
           TAVILY_API_KEY: process.env.TAVILY_API_KEY || '',
           SERVER_PORT: '3000',
         },

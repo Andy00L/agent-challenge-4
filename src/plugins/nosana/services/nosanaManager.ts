@@ -207,7 +207,8 @@ export class NosanaManager {
       return currentRecord;
     } catch (error) {
       console.error(`[AgentForge:Manager] Deployment failed for ${params.name}:`, error);
-      throw new Error(`Failed to deploy ${params.name}: ${error}`);
+      const msg = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to deploy ${params.name}: ${msg}`);
     }
   }
 
@@ -250,7 +251,7 @@ export class NosanaManager {
         console.log(`[AgentForge:Manager] ${record.name}: QUEUED (${elapsed}s, waiting for available GPU node)`);
 
         if (Date.now() - queueStart > QUEUE_FALLBACK_MS && triedAddresses.length < 3) {
-          try { await this.stopDeployment(deploymentId); } catch {}
+          try { await this.stopDeployment(deploymentId); } catch (e) { console.warn(`[AgentForge:Manager] Failed to stop queued deployment ${deploymentId}:`, e); }
           this.deployments.delete(deploymentId);
 
           triedAddresses.push(record.marketAddress);
@@ -522,6 +523,10 @@ export class NosanaManager {
 let _instance: NosanaManager | null = null;
 
 export function getNosanaManager(apiKey?: string): NosanaManager {
+  // If an explicit API key is provided and differs from the current instance, re-create
+  if (_instance && apiKey && apiKey !== _instance['apiKey']) {
+    _instance = new NosanaManager(apiKey);
+  }
   if (!_instance) {
     _instance = new NosanaManager(apiKey || process.env.NOSANA_API_KEY || '');
   }

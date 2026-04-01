@@ -25,27 +25,27 @@ function formatUptime(startedAt: string): string {
 
 function StatusDot({ status }: { status: string }) {
   const color =
-    status === 'running' ? 'bg-green-400 ring-2 ring-green-400/20' :
+    status === 'running' ? 'bg-green-500 ring-2 ring-green-500/20' :
     status === 'starting' ? 'bg-amber-400 animate-pulse ring-2 ring-amber-400/20' :
-    status === 'error' ? 'bg-red-400 ring-2 ring-red-400/20' :
-    'bg-zinc-500';
+    status === 'error' ? 'bg-red-500 ring-2 ring-red-500/20' :
+    'bg-gray-300';
   return <div className={`w-2.5 h-2.5 rounded-full ${color}`} />;
 }
 
 function StatCard({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
   return (
-    <Card className="border border-zinc-700/50"><CardContent className="px-4 py-3">
-      <div className="flex items-center gap-2 text-zinc-500 mb-1">
+    <Card className="hover:shadow-sm transition-all duration-200"><CardContent className="px-5 py-4">
+      <div className="flex items-center gap-2 text-muted-foreground mb-1.5">
         {icon}
-        <span className="text-xs uppercase tracking-wider">{label}</span>
+        <span className="text-xs uppercase tracking-widest font-medium">{label}</span>
       </div>
-      <div className="text-xl font-semibold text-zinc-100">{value}</div>
+      <div className="text-2xl font-bold text-foreground">{value}</div>
     </CardContent></Card>
   );
 }
 
 function ActivityPanel({ activity }: { activity: AgentActivity | undefined }) {
-  if (!activity) return <p className="text-xs text-zinc-600">Loading activity...</p>;
+  if (!activity) return <p className="text-xs text-muted-foreground">Loading activity...</p>;
 
   if (activity.status === 'active' && activity.messages.length > 0) {
     return (
@@ -53,14 +53,14 @@ function ActivityPanel({ activity }: { activity: AgentActivity | undefined }) {
         {activity.messages.slice(0, 10).map((msg, i) => (
           <div key={i} className="text-xs">
             <span className={`font-medium ${
-              msg.sender === activity.agentName ? 'text-violet-400' : 'text-zinc-400'
+              msg.sender === activity.agentName ? 'text-blue-600' : 'text-muted-foreground'
             }`}>
               {msg.sender}:
             </span>
-            <span className="text-zinc-300 ml-1">
+            <span className="text-foreground/80 ml-1">
               {msg.text.length > 150 ? msg.text.slice(0, 150) + '...' : msg.text}
             </span>
-            <span className="text-zinc-600 ml-1 text-[10px]">
+            <span className="text-muted-foreground ml-1 text-[10px]">
               {new Date(msg.timestamp).toLocaleTimeString()}
             </span>
           </div>
@@ -70,10 +70,10 @@ function ActivityPanel({ activity }: { activity: AgentActivity | undefined }) {
   }
 
   if (activity.status === 'unreachable' || activity.status === 'no_url') {
-    return <p className="text-xs text-amber-400">Agent is starting up or unreachable...</p>;
+    return <p className="text-xs text-amber-600">Agent is starting up or unreachable...</p>;
   }
 
-  return <p className="text-xs text-zinc-500">No activity yet. Send a message to the agent to get started.</p>;
+  return <p className="text-xs text-muted-foreground">No activity yet. Send a message to the agent to get started.</p>;
 }
 
 function AgentCard({ dep, expanded, onToggle }: { dep: DeploymentInfo; expanded: boolean; onToggle: () => void }) {
@@ -87,16 +87,20 @@ function AgentCard({ dep, expanded, onToggle }: { dep: DeploymentInfo; expanded:
     return () => clearInterval(interval);
   }, [expanded, dep.id, fetchActivity]);
 
-  const agentUrl = dep.url ? (dep.url.startsWith('http') ? dep.url : `https://${dep.url}`) : null;
+  const agentUrl = dep.url
+    ? (dep.url.startsWith('https://') || dep.url.startsWith('http://'))
+      ? dep.url
+      : `https://${dep.url}`
+    : null;
 
   return (
-    <Card className="border border-zinc-700/50 bg-zinc-900/50 hover:bg-accent/30 transition-colors"><CardContent className="p-4">
-      <div className="flex items-start justify-between mb-2">
+    <Card className="hover:shadow-sm transition-all duration-200"><CardContent className="p-5">
+      <div className="flex items-start justify-between mb-3">
         <div className="flex items-center gap-2.5">
           <StatusDot status={dep.status} />
           <div>
-            <div className="text-sm font-semibold text-zinc-100">{dep.name}</div>
-            <div className="text-xs text-zinc-500">
+            <div className="text-sm font-semibold text-foreground">{dep.name}</div>
+            <div className="text-xs text-muted-foreground mt-0.5">
               {TEMPLATE_DESCRIPTIONS[dep.agentTemplate || ''] || dep.agentTemplate || 'custom'}
             </div>
           </div>
@@ -108,24 +112,24 @@ function AgentCard({ dep, expanded, onToggle }: { dep: DeploymentInfo; expanded:
 
       <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs mb-3">
         <div>
-          <span className="text-zinc-500">Market</span>
-          <div className="text-zinc-300">{dep.market}</div>
+          <span className="text-muted-foreground">Market</span>
+          <div className="font-medium text-foreground">{dep.market}</div>
         </div>
         <div>
-          <span className="text-zinc-500">Replicas</span>
-          <div className="text-zinc-300">{dep.replicas}</div>
+          <span className="text-muted-foreground">Replicas</span>
+          <div className="font-medium text-foreground">{dep.replicas}</div>
         </div>
         <div>
-          <span className="text-zinc-500">Cost</span>
-          <div className="text-zinc-300">${dep.costPerHour.toFixed(3)}/hr</div>
+          <span className="text-muted-foreground">Cost</span>
+          <div className="font-medium text-foreground">${dep.costPerHour.toFixed(3)}/hr</div>
         </div>
         <div>
-          <span className="text-zinc-500">Uptime</span>
-          <div className="text-zinc-300">{dep.status === 'running' ? formatUptime(dep.startedAt) : '\u2014'}</div>
+          <span className="text-muted-foreground">Uptime</span>
+          <div className="font-medium text-foreground">{dep.status === 'running' ? formatUptime(dep.startedAt) : '\u2014'}</div>
         </div>
       </div>
 
-      <div className="flex items-center gap-3 mb-2">
+      <div className="flex items-center gap-3 mt-3 pt-3 border-t">
         {dep.status === 'running' && agentUrl && (
           <Button variant="ghost" size="sm" render={<a href={agentUrl} target="_blank" rel="noopener noreferrer" />}>
             <ExternalLink className="w-3 h-3" />
@@ -148,17 +152,16 @@ function AgentCard({ dep, expanded, onToggle }: { dep: DeploymentInfo; expanded:
 
       {expanded && (
         <>
-          <Separator className="my-2" />
-          <div className="pt-1">
-            <h4 className="text-xs font-semibold text-zinc-400 uppercase mb-2">Recent Activity</h4>
+          <Separator className="my-3" />
+          <div>
+            <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-widest mb-2">Recent Activity</h4>
             <ActivityPanel activity={activity} />
           </div>
         </>
       )}
 
-      <Separator className="my-2" />
-      <div className="flex gap-2">
-        <span className="text-[10px] uppercase tracking-wider text-zinc-600 bg-zinc-800/50 rounded px-2 py-1">
+      <div className="mt-3 pt-2">
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-mono">
           ID: {dep.id.slice(0, 16)}...
         </span>
       </div>
@@ -177,72 +180,71 @@ export function FleetDashboard() {
     .slice(0, 6);
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-zinc-950">
+    <div className="flex flex-col h-full overflow-hidden bg-background">
       {/* Header */}
-      <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-700/50 bg-zinc-900/40 shrink-0">
+      <div className="flex items-center justify-between px-6 py-4 border-b bg-white shrink-0">
         <div className="flex items-center gap-2">
-          <Server className="w-5 h-5 text-violet-400" />
-          <span className="text-sm font-semibold text-zinc-100">Agent Fleet</span>
-          <span className="text-xs text-zinc-500">({deployments.length})</span>
+          <Server className="w-5 h-5 text-muted-foreground" />
+          <span className="text-lg font-semibold text-foreground">Agent Fleet</span>
+          <span className="text-sm text-muted-foreground">({deployments.length})</span>
         </div>
-        <div className="flex items-center gap-3 text-xs text-zinc-500">
+        <div className="flex items-center gap-3 text-sm text-muted-foreground">
           <span className="cost-counter">${totalCostPerHour.toFixed(3)}/hr</span>
-          <span className="text-zinc-700">|</span>
+          <span className="text-border">|</span>
           <span>Spent: <span className="cost-counter">${totalSpent.toFixed(3)}</span></span>
           {creditsBalance !== null && (
             <>
-              <span className="text-zinc-700">|</span>
-              <span>Credits: <span className="text-green-400 cost-counter">${creditsBalance.toFixed(2)}</span></span>
+              <span className="text-border">|</span>
+              <span>Credits: <span className="text-green-600 font-semibold cost-counter">${creditsBalance.toFixed(2)}</span></span>
             </>
           )}
         </div>
       </div>
 
-      {/* Section 1: Fleet Overview */}
-      <div className="shrink-0 px-5 pt-4 mb-4">
-        <h3 className="text-xs font-medium text-zinc-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
-          <LayoutGrid className="w-3.5 h-3.5" />
-          Fleet Overview
-        </h3>
-        <div className="grid grid-cols-4 gap-3">
-          <StatCard icon={<Activity className="w-3.5 h-3.5" />} label="Agents" value={String(activeCount)} />
-          <StatCard icon={<Server className="w-3.5 h-3.5" />} label="Replicas" value={String(totalReplicas)} />
-          <StatCard icon={<Cpu className="w-3.5 h-3.5" />} label="GPUs" value={String(activeCount)} />
-          <StatCard icon={<DollarSign className="w-3.5 h-3.5" />} label="Cost/hr" value={`$${totalCostPerHour.toFixed(3)}`} />
+      {/* Scrollable content */}
+      <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
+        {/* Section 1: Fleet Overview */}
+        <div>
+          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-widest mb-3 flex items-center gap-2">
+            <LayoutGrid className="w-3.5 h-3.5" />
+            Fleet Overview
+          </h3>
+          <div className="grid grid-cols-4 gap-4">
+            <StatCard icon={<Activity className="w-3.5 h-3.5" />} label="Agents" value={String(activeCount)} />
+            <StatCard icon={<Server className="w-3.5 h-3.5" />} label="Replicas" value={String(totalReplicas)} />
+            <StatCard icon={<Cpu className="w-3.5 h-3.5" />} label="GPUs" value={String(activeCount)} />
+            <StatCard icon={<DollarSign className="w-3.5 h-3.5" />} label="Cost/hr" value={`$${totalCostPerHour.toFixed(3)}`} />
+          </div>
         </div>
-      </div>
 
-      <div className="px-5 shrink-0"><Separator className="my-4" /></div>
-
-      {/* Section 2: GPU Markets */}
-      {premiumMarkets.length > 0 && (
-        <>
-          <div className="shrink-0 px-5 mb-4">
-            <Card className="border border-zinc-700/50">
+        {/* Section 2: GPU Markets */}
+        {premiumMarkets.length > 0 && (
+          <div>
+            <Card>
               <CardHeader className="pb-0">
-                <CardTitle className="text-xs font-medium text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
+                <CardTitle className="text-xs font-semibold text-muted-foreground uppercase tracking-widest flex items-center gap-2">
                   <Cpu className="w-3.5 h-3.5" />
                   Nosana GPU Markets
-                  <span className="text-[10px] text-zinc-600 normal-case tracking-normal font-normal">(live pricing)</span>
+                  <span className="text-[10px] text-muted-foreground normal-case tracking-normal font-normal">(live pricing)</span>
                 </CardTitle>
               </CardHeader>
-              <CardContent className="max-h-[200px] overflow-y-auto">
-                <div className="grid grid-cols-3 gap-2">
+              <CardContent className="max-h-[220px] overflow-y-auto">
+                <div className="grid grid-cols-3 gap-3">
                   {premiumMarkets.map((market) => (
                     <Tooltip key={market.address}>
                       <TooltipTrigger>
-                        <Card className="hover:bg-accent/30 transition-colors cursor-default"><CardContent className="p-2.5">
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-[11px] font-medium text-zinc-200 truncate">
+                        <Card className="bg-muted hover:border-foreground/30 hover:shadow-sm hover:-translate-y-px transition-all duration-200 cursor-default"><CardContent className="p-3">
+                          <div className="flex items-center justify-between mb-1.5">
+                            <span className="text-xs font-medium text-foreground truncate">
                               {market.gpu || market.name}
                             </span>
                             {market.type === 'PREMIUM' && (
-                              <Badge variant="secondary" className="text-[9px] shrink-0 ml-1">PREMIUM</Badge>
+                              <Badge className="bg-primary text-primary-foreground text-[9px] shrink-0 ml-1 border-transparent uppercase tracking-wider font-semibold">PREMIUM</Badge>
                             )}
                           </div>
-                          <span className="text-sm font-semibold text-zinc-100 cost-counter">
+                          <span className="text-xl font-bold text-foreground cost-counter">
                             ${market.pricePerHour.toFixed(3)}
-                            <span className="text-[10px] text-zinc-500 font-normal">/hr</span>
+                            <span className="text-xs text-muted-foreground font-normal">/hr</span>
                           </span>
                         </CardContent></Card>
                       </TooltipTrigger>
@@ -256,38 +258,36 @@ export function FleetDashboard() {
               </CardContent>
             </Card>
           </div>
-
-          <div className="px-5 shrink-0"><Separator className="my-4" /></div>
-        </>
-      )}
-
-      {/* Section 3: Active Deployments */}
-      <div className="shrink-0 px-5 pt-2 pb-2">
-        <h3 className="text-xs font-medium text-zinc-400 uppercase tracking-wider flex items-center gap-2">
-          <Users className="w-3.5 h-3.5" />
-          Active Deployments
-          <Badge variant="secondary" className="text-[10px]">{deployments.length}</Badge>
-        </h3>
-      </div>
-      <div className="flex-1 overflow-y-auto px-5 pb-4 space-y-3">
-        {deployments.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-8 text-center">
-            <div className="w-12 h-12 rounded-xl bg-zinc-800/50 border border-zinc-700/30 flex items-center justify-center mb-4">
-              <Square className="w-6 h-6 text-zinc-600" />
-            </div>
-            <p className="text-sm text-zinc-400 mb-1">No agents deployed</p>
-            <p className="text-xs text-zinc-500">Use the chat to start a mission or deploy an agent</p>
-          </div>
-        ) : (
-          deployments.map((dep) => (
-            <AgentCard
-              key={dep.id}
-              dep={dep}
-              expanded={expandedAgent === dep.id}
-              onToggle={() => setExpandedAgent(expandedAgent === dep.id ? null : dep.id)}
-            />
-          ))
         )}
+
+        {/* Section 3: Active Deployments */}
+        <div>
+          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-widest flex items-center gap-2 mb-3">
+            <Users className="w-3.5 h-3.5" />
+            Active Deployments
+            <Badge className="bg-primary text-primary-foreground text-[10px] border-transparent">{deployments.length}</Badge>
+          </h3>
+          <div className="space-y-3">
+            {deployments.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12 text-center">
+                <div className="w-12 h-12 rounded-xl bg-muted border flex items-center justify-center mb-4 opacity-40">
+                  <Square className="w-6 h-6 text-muted-foreground" />
+                </div>
+                <p className="text-sm font-medium text-muted-foreground mb-1">No agents deployed</p>
+                <p className="text-xs text-muted-foreground/70">Use the chat to start a mission or deploy an agent</p>
+              </div>
+            ) : (
+              deployments.map((dep) => (
+                <AgentCard
+                  key={dep.id}
+                  dep={dep}
+                  expanded={expandedAgent === dep.id}
+                  onToggle={() => setExpandedAgent(expandedAgent === dep.id ? null : dep.id)}
+                />
+              ))
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );

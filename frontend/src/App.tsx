@@ -38,42 +38,42 @@ export default function App() {
     <TooltipProvider>
     <div className="h-screen flex flex-col bg-background text-foreground">
       {/* Header */}
-      <header className="h-12 flex items-center justify-between px-4 border-b bg-card/80 backdrop-blur-sm accent-border-bottom shrink-0">
+      <header className="h-14 flex items-center justify-between px-5 border-b bg-white/80 backdrop-blur-sm shadow-xs sticky top-0 z-40 shrink-0">
         <div className="flex items-center gap-3">
-          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-violet-600 to-indigo-500 flex items-center justify-center">
+          <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center shadow-sm">
             <span className="text-white text-sm font-bold">&#x26A1;</span>
           </div>
           <div>
-            <h1 className="text-sm font-semibold leading-none">AgentForge</h1>
-            <p className="text-[10px] text-muted-foreground leading-none mt-0.5">Decentralized Agent Orchestration</p>
+            <h1 className="text-base font-bold tracking-tight leading-none text-foreground">AgentForge</h1>
+            <p className="text-[10px] text-muted-foreground leading-none mt-0.5 tracking-wide">Decentralized Agent Orchestration</p>
           </div>
         </div>
         <div className="flex items-center gap-3">
           {creditsBalance !== null && (
-            <Badge variant="outline" className="gap-1.5 font-normal">
-              <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
+            <Badge variant="outline" className="gap-1.5 bg-green-50 border-green-200 text-green-700 font-semibold px-3 py-1 h-auto">
+              <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
               <span className="cost-counter">${creditsBalance.toFixed(2)}</span>
-              <span className="text-muted-foreground">credits</span>
+              <span className="text-green-600/70 font-normal">credits</span>
             </Badge>
           )}
-          <Badge variant="secondary" className="font-normal text-violet-400 bg-violet-950/30 border-violet-800/30">
+          <span className="text-xs text-muted-foreground hover:text-foreground/70 transition-colors cursor-default">
             Powered by Nosana
-          </Badge>
+          </span>
         </div>
       </header>
 
       {/* Main layout */}
       <div className="flex-1 flex overflow-hidden">
         {/* Chat panel */}
-        <div className="w-[35%] min-w-[340px] max-w-[480px] border-r flex flex-col bg-card/50">
+        <div className="w-[35%] min-w-[340px] max-w-[480px] border-r flex flex-col bg-white">
           <ChatPanel />
         </div>
 
         {/* Right side with Tabs */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col">
-          <div className="px-4 py-2 border-b shrink-0">
-            <TabsList>
-              <TabsTrigger value="mission" className="gap-1.5">
+          <div className="px-5 py-2.5 border-b bg-white shrink-0">
+            <TabsList variant="line">
+              <TabsTrigger value="mission" className="gap-1.5 px-4 py-2.5">
                 Mission Canvas
                 {missionStatus !== 'idle' && (
                   <span className={`inline-block w-2 h-2 rounded-full ${
@@ -84,7 +84,7 @@ export default function App() {
                   }`} />
                 )}
               </TabsTrigger>
-              <TabsTrigger value="fleet">
+              <TabsTrigger value="fleet" className="px-4 py-2.5">
                 Fleet ({deployments.length})
               </TabsTrigger>
             </TabsList>

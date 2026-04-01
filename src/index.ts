@@ -1,3 +1,14 @@
+// LLM Variable Alias — map canonical vars to ElizaOS expected names
+// ElizaOS reads OPENAI_BASE_URL, OPENAI_SMALL_MODEL, OPENAI_LARGE_MODEL internally.
+// We use OPENAI_API_URL and MODEL_NAME only. This alias bridges the gap.
+if (process.env.OPENAI_API_URL) {
+  process.env.OPENAI_BASE_URL = process.env.OPENAI_API_URL;
+}
+if (process.env.MODEL_NAME) {
+  process.env.OPENAI_SMALL_MODEL = process.env.MODEL_NAME;
+  process.env.OPENAI_LARGE_MODEL = process.env.MODEL_NAME;
+}
+
 import { readFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';

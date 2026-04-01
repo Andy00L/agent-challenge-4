@@ -31,6 +31,11 @@ RUN bun run node_modules/.bin/tsc
 # Create data directory for SQLite
 RUN mkdir -p /app/data
 
+# Run as non-root user
+RUN groupadd -r appuser && useradd -r -g appuser -d /app appuser
+RUN chown -R appuser:appuser /app
+USER appuser
+
 EXPOSE 3000 3001
 
 ENV NODE_ENV=production

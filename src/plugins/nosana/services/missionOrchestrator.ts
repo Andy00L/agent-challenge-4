@@ -251,9 +251,9 @@ function buildFallbackPrompt(task: string, missionText: string): string {
 export class MissionOrchestrator {
 
   async planPipeline(mission: string): Promise<PipelineStep[]> {
-    const baseUrl = process.env.OPENAI_BASE_URL || process.env.OPENAI_API_URL || '';
+    const baseUrl = process.env.OPENAI_API_URL || '';
     const apiKey = process.env.OPENAI_API_KEY || 'nosana';
-    const model = process.env.OPENAI_SMALL_MODEL || 'Qwen3.5-27B-AWQ-4bit';
+    const model = process.env.MODEL_NAME || 'Qwen3.5-27B-AWQ-4bit';
 
     if (!baseUrl) return this.planFallback(mission);
 
@@ -501,7 +501,7 @@ JSON array only, no markdown:`,
 
     // Calculate DAG depth levels for parallel execution
     const levels = calculateDepthLevels(steps);
-    const maxDepth = levels.size > 0 ? Math.max(...levels.keys()) : 0;
+    const maxDepth = levels.size > 0 ? Math.max(...Array.from(levels.keys())) : 0;
 
     // Pre-compute depth info for frontend layout
     const depthInfo = new Map<string, { depth: number; parallelIndex: number; parallelCount: number }>();
@@ -546,7 +546,8 @@ JSON array only, no markdown:`,
     log(`pipeline:created — ${steps.length} steps across ${levels.size} depth levels`);
 
     // Narrate pipeline plan
-    const maxParallel = Math.max(...[...levels.values()].map(ids => ids.length));
+    const levelSizes = [...levels.values()].map(ids => ids.length);
+    const maxParallel = levelSizes.length > 0 ? Math.max(...levelSizes) : 1;
     narrate(
       `\u{1F4CB} **Pipeline planned:** ${steps.length} agents across ${levels.size} stage${levels.size > 1 ? 's' : ''}` +
       (maxParallel > 1 ? ` (${maxParallel} running in parallel)` : '') +
@@ -579,11 +580,11 @@ JSON array only, no markdown:`,
             AGENT_SYSTEM_PROMPT: tmpl.defaultPrompt,
             AGENT_PLUGINS: tmpl.plugins.join(','),
             OPENAI_API_KEY: process.env.OPENAI_API_KEY || 'nosana',
-            OPENAI_BASE_URL: process.env.OPENAI_BASE_URL || process.env.OPENAI_API_URL || '',
-            OPENAI_API_URL: process.env.OPENAI_BASE_URL || process.env.OPENAI_API_URL || '',
-            OPENAI_SMALL_MODEL: process.env.OPENAI_SMALL_MODEL || 'Qwen3.5-27B-AWQ-4bit',
-            OPENAI_LARGE_MODEL: process.env.OPENAI_LARGE_MODEL || 'Qwen3.5-27B-AWQ-4bit',
+            OPENAI_API_URL: process.env.OPENAI_API_URL || '',
+            OPENAI_BASE_URL: process.env.OPENAI_API_URL || '',
             MODEL_NAME: process.env.MODEL_NAME || 'Qwen3.5-27B-AWQ-4bit',
+            OPENAI_SMALL_MODEL: process.env.MODEL_NAME || 'Qwen3.5-27B-AWQ-4bit',
+            OPENAI_LARGE_MODEL: process.env.MODEL_NAME || 'Qwen3.5-27B-AWQ-4bit',
             TAVILY_API_KEY: process.env.TAVILY_API_KEY || '',
             SERVER_PORT: '3000',
           },
@@ -623,7 +624,7 @@ JSON array only, no markdown:`,
       log(`node:status — ${node.step.name}: worker didn't boot — trying next GPU market`);
       narrate(`\u{26A0}\u{FE0F} **${node.step.name}** worker didn't boot — retrying on different market...`);
 
-      try { if (node.deploymentId) await manager.stopDeployment(node.deploymentId); } catch {}
+      try { if (node.deploymentId) await manager.stopDeployment(node.deploymentId); } catch (e) { log(`Failed to stop ${node.step.name}: ${e}`); }
 
       const nextMarket = await manager.getNextBestMarket(triedMarketAddresses);
       if (!nextMarket) {
@@ -648,11 +649,11 @@ JSON array only, no markdown:`,
             AGENT_SYSTEM_PROMPT: tmpl.defaultPrompt,
             AGENT_PLUGINS: tmpl.plugins.join(','),
             OPENAI_API_KEY: process.env.OPENAI_API_KEY || 'nosana',
-            OPENAI_BASE_URL: process.env.OPENAI_BASE_URL || process.env.OPENAI_API_URL || '',
-            OPENAI_API_URL: process.env.OPENAI_BASE_URL || process.env.OPENAI_API_URL || '',
-            OPENAI_SMALL_MODEL: process.env.OPENAI_SMALL_MODEL || 'Qwen3.5-27B-AWQ-4bit',
-            OPENAI_LARGE_MODEL: process.env.OPENAI_LARGE_MODEL || 'Qwen3.5-27B-AWQ-4bit',
+            OPENAI_API_URL: process.env.OPENAI_API_URL || '',
+            OPENAI_BASE_URL: process.env.OPENAI_API_URL || '',
             MODEL_NAME: process.env.MODEL_NAME || 'Qwen3.5-27B-AWQ-4bit',
+            OPENAI_SMALL_MODEL: process.env.MODEL_NAME || 'Qwen3.5-27B-AWQ-4bit',
+            OPENAI_LARGE_MODEL: process.env.MODEL_NAME || 'Qwen3.5-27B-AWQ-4bit',
             TAVILY_API_KEY: process.env.TAVILY_API_KEY || '',
             SERVER_PORT: '3000',
           },
@@ -789,7 +790,7 @@ JSON array only, no markdown:`,
     if (nodes.every(n => n.status === 'error')) {
       for (const node of nodes) {
         if (node.deploymentId) {
-          try { await manager.stopDeployment(node.deploymentId); } catch {}
+          try { await manager.stopDeployment(node.deploymentId); } catch (e) { log(`Cleanup stop failed for ${node.step.name}: ${e}`); }
         }
       }
       currentPipelineState = { ...currentPipelineState, status: 'error', completedAt: Date.now() };
@@ -824,7 +825,7 @@ JSON array only, no markdown:`,
     log('Cleaning up mission agents...');
     for (const node of nodes) {
       if (node.deploymentId) {
-        try { await manager.stopDeployment(node.deploymentId); log(`Stopped ${node.step.name}`); } catch {}
+        try { await manager.stopDeployment(node.deploymentId); log(`Stopped ${node.step.name}`); } catch (e) { log(`Failed to stop ${node.step.name} during cleanup: ${e}`); }
       }
     }
 

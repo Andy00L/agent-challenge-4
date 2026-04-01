@@ -52,8 +52,8 @@ export class ErrorBoundary extends Component<Props, State> {
   render(): ReactNode {
     if (this.state.hasError) {
       return (
-        <div className="h-screen flex items-center justify-center bg-zinc-950 text-zinc-300">
-          <Alert variant="destructive" className="max-w-md">
+        <div className="h-screen flex items-center justify-center bg-background text-foreground">
+          <Alert variant="destructive" className="max-w-md shadow-md">
             <AlertCircle className="h-4 w-4" />
             <AlertTitle>Something went wrong</AlertTitle>
             <AlertDescription>{this.state.error?.message || 'An unexpected error occurred'}</AlertDescription>
