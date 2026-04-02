@@ -80,7 +80,7 @@ async function generateWithElevenLabs(text: string, apiKey: string): Promise<TTS
         headers: { 'xi-api-key': apiKey, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text,
-          model_id: 'eleven_monolingual_v1',
+          model_id: 'eleven_flash_v2_5',
           output_format: 'mp3_44100_128',
         }),
         signal: AbortSignal.timeout(120_000),
@@ -155,7 +155,7 @@ async function generateWithElevenLabs(text: string, apiKey: string): Promise<TTS
       headers: { 'xi-api-key': apiKey, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         text,
-        model_id: 'eleven_monolingual_v1',
+        model_id: 'eleven_flash_v2_5',
         output_format: 'mp3_44100_128',
       }),
       signal: AbortSignal.timeout(120_000),

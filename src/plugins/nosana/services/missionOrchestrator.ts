@@ -534,19 +534,34 @@ function buildResearcherFallbackPrompt(task: string, missionText?: string): stri
 // System prompt: "content writer... produce high-quality written content"
 // → Always prose/markdown. Varies by root vs sequential vs merge.
 
+function detectVideoWordLimit(task: string): string {
+  const videoKeywords = /\b(video|script|narration|narrator|voiceover)\b/i;
+  const durationMatch = task.match(/(\d+)\s*-?\s*second/i);
+  if (videoKeywords.test(task) || durationMatch) {
+    const seconds = durationMatch ? parseInt(durationMatch[1]) : 30;
+    const maxWords = Math.max(40, Math.round(seconds * 2.5));
+    return `\n\nCRITICAL: This is a VIDEO NARRATION script. ` +
+      `MAXIMUM ${maxWords} words (${seconds} seconds of speech at ~2.5 words/sec). ` +
+      `Be concise. Every word must earn its place. Do NOT write an essay — write a punchy narration.`;
+  }
+  return '';
+}
+
 function buildWriterRootPrompt(task: string, missionText?: string): string {
+  const videoLimit = detectVideoWordLimit(task);
   return [
     'ROLE: You are a content writer creating original material.',
     '',
     'CRITICAL RULES:',
     '1. START with the title: "# [Your Title]" on the very first line.',
     '2. No preamble. No planning. Just write.',
-    '3. MINIMUM 600 words.',
+    videoLimit ? '' : '3. MINIMUM 600 words.',
     '4. Use markdown formatting: headings (##), bold, lists where appropriate.',
     '5. Include specific facts, examples, names, and details.',
     '',
     `TASK: ${task}`,
     missionText ? `\nMISSION CONTEXT: ${missionText}` : '',
+    videoLimit,
     '',
     ANTI_REFLECTION,
     '',
@@ -555,6 +570,7 @@ function buildWriterRootPrompt(task: string, missionText?: string): string {
 }
 
 function buildWriterSequentialPrompt(task: string, parentOutput: string): string {
+  const videoLimit = detectVideoWordLimit(task);
   return [
     'ROLE: You are a content writer transforming source material into polished content.',
     '',
@@ -562,7 +578,7 @@ function buildWriterSequentialPrompt(task: string, parentOutput: string): string
     '1. START with "# [Your Title]" on the very first line.',
     '2. Do NOT acknowledge the input. TRANSFORM it into the deliverable.',
     '3. Do NOT summarize what you received. Create NEW content from it.',
-    '4. MINIMUM 800 words.',
+    videoLimit ? '' : '4. MINIMUM 800 words.',
     '5. Use markdown: headings (##), bold, lists, blockquotes where appropriate.',
     '',
     '=== SOURCE MATERIAL ===',
@@ -570,13 +586,14 @@ function buildWriterSequentialPrompt(task: string, parentOutput: string): string
     '=== END SOURCE MATERIAL ===',
     '',
     `TASK: ${task}`,
+    videoLimit,
     '',
     ANTI_REFLECTION,
     '- "Based on the research provided" / "The research shows that"',
     '- "The previous agent" / Any meta-commentary about source material',
     '',
     'PRODUCE THE CONTENT NOW (first line must be "# [Title]"):',
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 function buildWriterMergePrompt(task: string, parentOutputs: { name: string; output: string }[]): string {
@@ -1033,6 +1050,9 @@ MULTIMODAL PIPELINE RULES:
 4. Only include multimodal steps if the mission EXPLICITLY asks for visual content, video, images, or audio.
 5. For text-only missions (research, blog posts, analysis), stick to researcher/writer/analyst.
 6. video-generator MUST depend on BOTH a scene-writer AND a narrator step. It assembles scene images + narrated audio into an MP4 slideshow.
+7. CRITICAL: video-generator generates its own images internally. NEVER add separate image-generator nodes alongside a video-generator. Maximum 5 steps for video missions: researcher → writer → scene-writer + narrator (parallel) → video-generator.
+
+VIDEO DURATION RULE: When the user requests a specific video duration (e.g. "30-second video"), the writer step MUST include the word count limit in its task field. Approximate: 15s=40 words, 30s=75 words, 60s=150 words, 2min=300 words. Example task for 30s: "Write a concise 30-second narration script (MAXIMUM 75 words) about space exploration."
 
 NAME field: short PascalCase (e.g. "AIResearcher", "BlogWriter", "CompetitiveAnalyst", "SceneWriter", "ImageGen1")
 
@@ -1080,6 +1100,8 @@ Respond with ONLY the JSON array:`,
 
       // Post-plan validation: filter out steps for unavailable capabilities
       steps = this.validateMultimodalSteps(steps, capabilities);
+      // Strip redundant image-generator nodes when video-generator exists
+      steps = this.stripRedundantImageNodes(steps);
 
       // Guard: if all steps were filtered out, fall back
       if (steps.length === 0) {
@@ -1173,6 +1195,55 @@ Respond with ONLY the JSON array:`,
     return [];
   }
 
+  /**
+   * Strip redundant image-generator nodes when a video-generator exists.
+   * The video-generator handles image generation internally — separate image-generator
+   * nodes would spawn duplicate GPU containers.
+   */
+  private stripRedundantImageNodes(steps: PipelineStep[]): PipelineStep[] {
+    const hasVideoGenerator = steps.some(s => s.template === 'video-generator');
+    if (!hasVideoGenerator) return steps;
+
+    const removedIds = new Set<string>();
+    const filtered = steps.filter(step => {
+      if (step.template === 'image-generator') {
+        removedIds.add(step.id);
+        return false;
+      }
+      return true;
+    });
+
+    if (removedIds.size > 0) {
+      console.log(
+        `[AgentForge:Orchestrator] Stripped ${removedIds.size} redundant image-generator node(s) ` +
+        `(video-generator handles images internally)`
+      );
+
+      // Remap dependencies: anything depending on removed nodes should drop those deps
+      for (const step of filtered) {
+        if (!step.dependsOn) continue;
+        const deps = Array.isArray(step.dependsOn) ? step.dependsOn : [step.dependsOn];
+        const cleaned = deps.filter(d => !removedIds.has(d));
+        step.dependsOn = cleaned.length === 0 ? undefined : cleaned.length === 1 ? cleaned[0] : cleaned;
+      }
+
+      // Re-index step IDs to be contiguous
+      const oldToNew = new Map<string, string>();
+      filtered.forEach((step, i) => {
+        oldToNew.set(step.id, `step-${i}`);
+        step.id = `step-${i}`;
+      });
+      for (const step of filtered) {
+        if (!step.dependsOn) continue;
+        const deps = Array.isArray(step.dependsOn) ? step.dependsOn : [step.dependsOn];
+        const remapped = deps.map(d => oldToNew.get(d) || d);
+        step.dependsOn = remapped.length === 1 ? remapped[0] : remapped;
+      }
+    }
+
+    return filtered;
+  }
+
   private planFallback(mission: string): PipelineStep[] {
     const lower = mission.toLowerCase();
 
@@ -1209,6 +1280,30 @@ Respond with ONLY the JSON array:`,
       });
 
       return steps;
+    }
+
+    // Video/animation pattern → 5-step slideshow pipeline
+    if (/video|animation|film|movie|clip/i.test(lower)) {
+      console.log('[AgentForge:Orchestrator] Detected video mission — using 5-step slideshow pipeline');
+      const durationMatch = mission.match(/(\d+)\s*-?\s*second/i);
+      const seconds = durationMatch ? parseInt(durationMatch[1]) : 30;
+      const maxWords = Math.max(40, Math.round(seconds * 2.5));
+      return [
+        { id: 'step-0', template: 'researcher', name: 'Researcher',
+          task: `Research the following topic thoroughly: ${mission}`, dependsOn: undefined },
+        { id: 'step-1', template: 'writer', name: 'ScriptWriter',
+          task: `Write a concise ${seconds}-second narration script (MAXIMUM ${maxWords} words) about ${mission}. Keep it punchy and visual.`,
+          dependsOn: 'step-0' },
+        { id: 'step-2', template: 'scene-writer', name: 'SceneWriter',
+          task: 'Break the script into 4-6 visual scenes with image prompts',
+          dependsOn: 'step-1' },
+        { id: 'step-3', template: 'narrator', name: 'Narrator',
+          task: 'Generate audio narration from the script',
+          dependsOn: 'step-1' },
+        { id: 'step-4', template: 'video-generator', name: 'VideoAssembler',
+          task: 'Assemble slideshow video from scene images and narration audio',
+          dependsOn: ['step-2', 'step-3'] },
+      ];
     }
 
     // Detect "X AND Y" parallel pattern — needs 3+ meaningful segments
@@ -1686,16 +1781,42 @@ Respond with ONLY the JSON array:`,
           }
           log(`Generating slideshow: ${scenes.length} scenes`);
 
-          // 2. Generate images — boot SD 1.5 once, reuse for all scenes
+          // 2. Collect images — check sibling image-generator nodes first, then generate remaining
           const assembler = new MediaAssembler();
           const sceneMedias: Array<{ sceneNumber: number; imagePath: string; durationSeconds: number; title: string }> = [];
+
+          // Check if sibling image-generator nodes already produced images
+          const existingImageNodes = nodes.filter(n =>
+            n.step.template === 'image-generator' && n.status === 'complete' && n.outputUrls && n.outputUrls.length > 0
+          );
+          if (existingImageNodes.length > 0) {
+            log(`Found ${existingImageNodes.length} existing image node(s) — reusing their images`);
+            for (const imgNode of existingImageNodes) {
+              for (const url of imgNode.outputUrls || []) {
+                try {
+                  const imagePath = await assembler.downloadMedia(url, `existing-${sceneMedias.length + 1}.png`);
+                  const sceneInfo = scenes[sceneMedias.length] || { sceneNumber: sceneMedias.length + 1, durationSeconds: 6, title: imgNode.step.name };
+                  sceneMedias.push({
+                    sceneNumber: sceneInfo.sceneNumber, imagePath,
+                    durationSeconds: sceneInfo.durationSeconds, title: sceneInfo.title,
+                  });
+                } catch (dlErr: any) {
+                  log(`Failed to download existing image from ${imgNode.step.name}: ${dlErr.message}`);
+                }
+              }
+            }
+            log(`Reused ${sceneMedias.length} image(s) from sibling nodes`);
+          }
+
+          // Only generate new images for scenes not yet covered
+          const scenesNeedingImages = scenes.slice(sceneMedias.length);
 
           let sd15Url: string | null = null;
           let sd15Failed = false;
           const hasNosana = !!(process.env.NOSANA_API_KEY && process.env.NOSANA_API_KEY !== 'YOUR_NOSANA_API_KEY');
 
-          // Try to boot SD 1.5 once for all scenes
-          if (hasNosana && !sd15Failed) {
+          // Try to boot SD 1.5 once for remaining scenes (skip if all covered by siblings)
+          if (scenesNeedingImages.length > 0 && hasNosana && !sd15Failed) {
             try {
               const { IMAGE_SERVICE } = await import('./mediaServiceDefinitions.js');
               narrate(`\u{1F680} Booting SD 1.5 on Nosana GPU...`);
@@ -1709,7 +1830,7 @@ Respond with ONLY the JSON array:`,
 
           const { A1111Client: A1111 } = await import('./a1111Client.js');
 
-          for (const scene of scenes.slice(0, 6)) {
+          for (const scene of scenesNeedingImages.slice(0, 6)) {
             let imgResult: { base64?: string; url?: string } | null = null;
 
             // Try warm SD 1.5 first
