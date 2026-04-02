@@ -28,6 +28,10 @@ export interface GpuMarket {
   pricePerHour: number;
   type?: string;
   nodesAvailable?: number;
+  /** Blockchain queue type: 0=JOB_QUEUE (jobs wait), 1=NODE_QUEUE (nodes wait for jobs) */
+  queueType?: number;
+  /** True when blockchain shows idle GPU nodes (queueType=1 AND queue.length > 0) */
+  hasIdleNodes?: boolean;
 }
 
 // Fallback addresses (used only when API is unavailable)

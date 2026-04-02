@@ -436,17 +436,31 @@ export class NosanaManager {
     try {
       const apiMarkets = await this.client.api.markets.list();
 
+      // Fetch blockchain data for REAL node availability (REST API nodes field is always [])
+      const blockchainData = new Map<string, { queueType: number; queueLength: number }>();
+      try {
+        const bcMarkets = await this.client.jobs.markets();
+        for (const bm of bcMarkets) {
+          const addr = String(bm.address);
+          blockchainData.set(addr, {
+            queueType: bm.queueType,      // 0=JOB_QUEUE (jobs wait), 1=NODE_QUEUE (nodes wait)
+            queueLength: Array.isArray(bm.queue) ? bm.queue.length : 0,
+          });
+        }
+        const marketsWithIdle = [...blockchainData.values()].filter(v => v.queueType === 1 && v.queueLength > 0).length;
+        console.log(`[AgentForge:Manager] Blockchain: ${bcMarkets.length} markets, ${marketsWithIdle} with idle GPU nodes`);
+      } catch (bcErr: any) {
+        console.log(`[AgentForge:Manager] Blockchain market fetch failed (using REST only): ${bcErr.message}`);
+      }
+
       const markets: GpuMarket[] = apiMarkets.map((m: any) => {
         const reward = typeof m.usd_reward_per_hour === 'number' ? m.usd_reward_per_hour : 0;
         const fee = typeof m.network_fee_percentage === 'number' ? m.network_fee_percentage : 10;
         const userCost = reward * (1 + fee / 100);
 
-        // Map node availability from the "nodes" field
-        const rawNodes = m.nodes;
-        const nodesAvailable: number | undefined =
-          typeof rawNodes === 'number' ? rawNodes :
-          Array.isArray(rawNodes) ? rawNodes.length :
-          undefined;
+        // Blockchain data: real node availability (REST API m.nodes is always [] — useless)
+        const bc = blockchainData.get(m.address);
+        const idleNodes = bc?.queueType === 1 ? bc.queueLength : 0;
 
         return {
           address: m.address,
@@ -455,16 +469,12 @@ export class NosanaManager {
           gpu: (m.gpu_types || []).join(', ') || m.slug || '',
           pricePerHour: Math.round(userCost * 1000) / 1000,
           type: m.type || 'PREMIUM',
-          nodesAvailable,
+          nodesAvailable: idleNodes,
+          queueType: bc?.queueType ?? -1,
+          hasIdleNodes: bc?.queueType === 1 && bc.queueLength > 0,
         };
       });
       markets.sort((a, b) => a.pricePerHour - b.pricePerHour);
-      // One-time debug: dump raw fields from API for diagnosing node availability
-      if (this.cachedMarkets.length === 0 && markets.length > 0) {
-        const sample = apiMarkets[0];
-        console.log(`[AgentForge:Manager] Raw market fields: ${Object.keys(sample).join(', ')}`);
-        console.log(`[AgentForge:Manager] First market raw: ${JSON.stringify(sample).slice(0, 500)}`);
-      }
       this.cachedMarkets = markets;
       this.lastMarketFetch = Date.now();
       return markets;
@@ -508,9 +518,8 @@ export class NosanaManager {
   }
 
   /**
-   * Get the cheapest available PREMIUM GPU market from Nosana.
-   * Prefers markets with available nodes over empty ones.
-   * Markets with unknown availability (nodesAvailable === undefined) are treated as available.
+   * Get the best available PREMIUM GPU market from Nosana.
+   * Priority: 1) idle nodes (instant), 2) NODE_QUEUE (fast turnaround), 3) any PREMIUM.
    *
    * @param excludeAddresses - Market addresses to skip (cold/failed markets)
    */
@@ -522,30 +531,38 @@ export class NosanaManager {
     );
     if (candidates.length === 0) return null;
 
-    // Separate: markets with nodes (or unknown) vs confirmed empty
-    const withNodes = candidates.filter(m => m.nodesAvailable === undefined || m.nodesAvailable > 0);
-    const empty = candidates.filter(m => m.nodesAvailable !== undefined && m.nodesAvailable === 0);
+    // PRIORITY 1: Markets with idle GPU nodes (instant deployment)
+    const withIdle = candidates
+      .filter(m => m.hasIdleNodes)
+      .sort((a, b) => a.pricePerHour - b.pricePerHour);
 
-    const selected = withNodes.length > 0 ? withNodes[0] : empty[0];
-    if (!selected) return null;
-
-    if (empty.length > 0 && withNodes.length > 0) {
-      console.log(
-        `[AgentForge:Manager] Market selected: ${selected.name} ($${selected.pricePerHour}/hr, ` +
-        `${selected.nodesAvailable ?? '?'} nodes) — skipped empty: ${empty.map(m => m.name).join(', ')}`
-      );
-    } else {
-      console.log(
-        `[AgentForge:Manager] Market selected: ${selected.name} ($${selected.pricePerHour}/hr, ` +
-        `${selected.nodesAvailable ?? '?'} nodes)`
-      );
+    if (withIdle.length > 0) {
+      const best = withIdle[0];
+      console.log(`[AgentForge:Manager] Market selected: ${best.name} ($${best.pricePerHour.toFixed(3)}/hr, ${best.nodesAvailable} idle nodes) — INSTANT`);
+      return best;
     }
-    return selected;
+
+    // PRIORITY 2: NODE_QUEUE markets (nodes registered but busy, fast turnaround)
+    const nodeQueue = candidates
+      .filter(m => m.queueType === 1)
+      .sort((a, b) => a.pricePerHour - b.pricePerHour);
+
+    if (nodeQueue.length > 0) {
+      const best = nodeQueue[0];
+      console.log(`[AgentForge:Manager] Market selected: ${best.name} ($${best.pricePerHour.toFixed(3)}/hr, NODE_QUEUE but 0 idle) — QUEUED`);
+      return best;
+    }
+
+    // PRIORITY 3: Any PREMIUM market (JOB_QUEUE, may wait longer)
+    const cheapest = candidates.sort((a, b) => a.pricePerHour - b.pricePerHour);
+    const best = cheapest[0];
+    console.log(`[AgentForge:Manager] Market selected: ${best.name} ($${best.pricePerHour.toFixed(3)}/hr, JOB_QUEUE) — MAY WAIT`);
+    return best;
   }
 
   /**
-   * Get the next cheapest PREMIUM market, excluding already-tried addresses.
-   * Prefers markets with available nodes over empty ones.
+   * Get the next best PREMIUM market, excluding already-tried addresses.
+   * Same priority as getBestMarket: idle nodes → NODE_QUEUE → any PREMIUM.
    */
   async getNextBestMarket(excludeAddresses: string[]): Promise<GpuMarket | null> {
     const markets = await this.getMarkets(true);
@@ -555,8 +572,14 @@ export class NosanaManager {
     );
     if (candidates.length === 0) return null;
 
-    const withNodes = candidates.filter(m => m.nodesAvailable === undefined || m.nodesAvailable > 0);
-    return withNodes.length > 0 ? withNodes[0] : candidates[0];
+    // Same priority: idle nodes → NODE_QUEUE → any
+    const withIdle = candidates.filter(m => m.hasIdleNodes).sort((a, b) => a.pricePerHour - b.pricePerHour);
+    if (withIdle.length > 0) return withIdle[0];
+
+    const nodeQueue = candidates.filter(m => m.queueType === 1).sort((a, b) => a.pricePerHour - b.pricePerHour);
+    if (nodeQueue.length > 0) return nodeQueue[0];
+
+    return candidates.sort((a, b) => a.pricePerHour - b.pricePerHour)[0];
   }
 
   /**
@@ -630,11 +653,11 @@ export class NosanaManager {
       !excluded.has(m.address) &&
       estimateGpuVram(m.gpu || m.name) >= minVramGB
     );
-    // Sort: markets with available nodes first, then by price
+    // Sort: idle nodes first → NODE_QUEUE → rest, then by price
     eligible.sort((a, b) => {
-      const aHasNodes = a.nodesAvailable === undefined || a.nodesAvailable > 0 ? 1 : 0;
-      const bHasNodes = b.nodesAvailable === undefined || b.nodesAvailable > 0 ? 1 : 0;
-      if (aHasNodes !== bHasNodes) return bHasNodes - aHasNodes;
+      const aScore = a.hasIdleNodes ? 2 : a.queueType === 1 ? 1 : 0;
+      const bScore = b.hasIdleNodes ? 2 : b.queueType === 1 ? 1 : 0;
+      if (aScore !== bScore) return bScore - aScore;
       return a.pricePerHour - b.pricePerHour;
     });
     return eligible;
@@ -674,8 +697,11 @@ export class NosanaManager {
     await this.getMarkets(true);
     const preferred = await this.findMarket(config.preferredMarket);
     if (preferred) {
-      if (preferred.nodesAvailable !== undefined && preferred.nodesAvailable === 0) {
-        console.log(`[AgentForge:Manager] Preferred market "${preferred.name}" has 0 nodes — will try but may queue`);
+      if (!preferred.hasIdleNodes) {
+        const reason = preferred.queueType === 1 ? 'NODE_QUEUE (nodes busy)' : 'JOB_QUEUE';
+        console.log(`[AgentForge:Manager] Preferred market "${preferred.name}" has no idle nodes (${reason}) — deploying to queue`);
+      } else {
+        console.log(`[AgentForge:Manager] Preferred market "${preferred.name}" has ${preferred.nodesAvailable} idle nodes — INSTANT`);
       }
       marketCandidates.push(preferred);
     } else {
@@ -702,19 +728,19 @@ export class NosanaManager {
       );
     }
 
-    // Sort candidates: markets with available nodes first, then empty ones
+    // Sort candidates: idle nodes first → NODE_QUEUE → rest, then by price
     marketCandidates.sort((a, b) => {
-      const aHasNodes = a.nodesAvailable === undefined || a.nodesAvailable > 0 ? 1 : 0;
-      const bHasNodes = b.nodesAvailable === undefined || b.nodesAvailable > 0 ? 1 : 0;
-      if (aHasNodes !== bHasNodes) return bHasNodes - aHasNodes; // nodes first
-      return a.pricePerHour - b.pricePerHour; // then by price
+      const aScore = a.hasIdleNodes ? 2 : a.queueType === 1 ? 1 : 0;
+      const bScore = b.hasIdleNodes ? 2 : b.queueType === 1 ? 1 : 0;
+      if (aScore !== bScore) return bScore - aScore;
+      return a.pricePerHour - b.pricePerHour;
     });
 
-    // Log skipped empty markets
-    const emptyMarkets = marketCandidates.filter(m => m.nodesAvailable !== undefined && m.nodesAvailable === 0);
-    if (emptyMarkets.length > 0) {
-      console.log(`[AgentForge:Manager] Skipping empty markets for ${config.name}: ${emptyMarkets.map(m => `${m.name} (0 nodes)`).join(', ')}`);
-    }
+    // Log market availability breakdown
+    const idleMarkets = marketCandidates.filter(m => m.hasIdleNodes);
+    const nodeQueueMarkets = marketCandidates.filter(m => !m.hasIdleNodes && m.queueType === 1);
+    const jobQueueMarkets = marketCandidates.filter(m => m.queueType !== 1);
+    console.log(`[AgentForge:Manager] ${config.name} market candidates: ${idleMarkets.length} with idle nodes, ${nodeQueueMarkets.length} NODE_QUEUE (busy), ${jobQueueMarkets.length} JOB_QUEUE`);
 
     const safeName = `media-${serviceKey}`.replace(/[^a-z0-9-]/g, '-').slice(0, 50);
     const triedAddresses: string[] = [];

@@ -19,7 +19,7 @@ export const MEDIA_SERVICES: Record<string, MediaServiceConfig> = {
     healthCheckPath: '/sdapi/v1/sd-models',
     minVramGB: 4,
     preferredMarket: 'NVIDIA 3060',
-    bootTimeoutMs: 300_000, // 5 min — SD 1.5 needs 3-4 min to boot + download 2GB model
+    bootTimeoutMs: 600_000, // 10 min — SD 1.5 model download from S3 (4GB) takes 3-6 min on Nosana nodes
     jobDefinition: {
       version: '0.1',
       type: 'container',
