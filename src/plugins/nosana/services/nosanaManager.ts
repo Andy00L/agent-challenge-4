@@ -421,8 +421,10 @@ export class NosanaManager {
     );
   }
 
+  private _marketFieldsLogged = false;
+
   async getMarkets(): Promise<GpuMarket[]> {
-    if (this.cachedMarkets.length > 0 && Date.now() - this.lastMarketFetch < 300_000) {
+    if (this.cachedMarkets.length > 0 && Date.now() - this.lastMarketFetch < 120_000) {
       return this.cachedMarkets;
     }
 
@@ -435,10 +437,26 @@ export class NosanaManager {
 
     try {
       const apiMarkets = await this.client.api.markets.list();
+
+      // One-time debug: log raw API fields so we know what's available
+      if (!this._marketFieldsLogged && apiMarkets[0]) {
+        this._marketFieldsLogged = true;
+        console.log('[AgentForge:Debug] Raw market fields:', Object.keys(apiMarkets[0]));
+      }
+
       const markets: GpuMarket[] = apiMarkets.map((m: any) => {
         const reward = typeof m.usd_reward_per_hour === 'number' ? m.usd_reward_per_hour : 0;
         const fee = typeof m.network_fee_percentage === 'number' ? m.network_fee_percentage : 10;
         const userCost = reward * (1 + fee / 100);
+
+        // Map node availability — try common Nosana API field names
+        const nodes: number | undefined =
+          typeof m.nodes_in_queue === 'number' ? m.nodes_in_queue :
+          typeof m.nodesInQueue === 'number' ? m.nodesInQueue :
+          typeof m.available_nodes === 'number' ? m.available_nodes :
+          typeof m.queue_length === 'number' ? m.queue_length :
+          undefined;
+
         return {
           address: m.address,
           name: m.name || m.slug || 'Unknown',
@@ -446,6 +464,7 @@ export class NosanaManager {
           gpu: (m.gpu_types || []).join(', ') || m.slug || '',
           pricePerHour: Math.round(userCost * 1000) / 1000,
           type: m.type || 'PREMIUM',
+          nodesAvailable: nodes,
         };
       });
       markets.sort((a, b) => a.pricePerHour - b.pricePerHour);
@@ -472,28 +491,54 @@ export class NosanaManager {
 
   /**
    * Get the cheapest available PREMIUM GPU market from Nosana.
-   * Filters out COMMUNITY markets (they reject credit payments).
-   * Markets are cached for 5 minutes to reduce API calls.
+   * Prefers markets with available nodes over empty ones.
+   * Markets with unknown availability (nodesAvailable === undefined) are treated as available.
    *
-   * @returns The cheapest GPU market, or null if none available
+   * @param excludeAddresses - Market addresses to skip (cold/failed markets)
    */
-  async getBestMarket(): Promise<GpuMarket | null> {
+  async getBestMarket(excludeAddresses: string[] = []): Promise<GpuMarket | null> {
     const markets = await this.getMarkets();
-    // Only premium markets — community/other types reject credit payments
-    return markets.find(m => m.pricePerHour > 0 && m.type === 'PREMIUM') || null;
+    const excluded = new Set(excludeAddresses);
+    const candidates = markets.filter(m =>
+      m.pricePerHour > 0 && m.type === 'PREMIUM' && !excluded.has(m.address)
+    );
+    if (candidates.length === 0) return null;
+
+    // Separate: markets with nodes (or unknown) vs confirmed empty
+    const withNodes = candidates.filter(m => m.nodesAvailable === undefined || m.nodesAvailable > 0);
+    const empty = candidates.filter(m => m.nodesAvailable !== undefined && m.nodesAvailable === 0);
+
+    const selected = withNodes.length > 0 ? withNodes[0] : empty[0];
+    if (!selected) return null;
+
+    if (empty.length > 0 && withNodes.length > 0) {
+      console.log(
+        `[AgentForge:Manager] Market selected: ${selected.name} ($${selected.pricePerHour}/hr, ` +
+        `${selected.nodesAvailable ?? '?'} nodes) — skipped empty: ${empty.map(m => m.name).join(', ')}`
+      );
+    } else {
+      console.log(
+        `[AgentForge:Manager] Market selected: ${selected.name} ($${selected.pricePerHour}/hr, ` +
+        `${selected.nodesAvailable ?? '?'} nodes)`
+      );
+    }
+    return selected;
   }
 
   /**
    * Get the next cheapest PREMIUM market, excluding already-tried addresses.
-   * Used for QUEUED fallback — when the first market has no available nodes.
-   *
-   * @param excludeAddresses - Market addresses that already returned QUEUED
-   * @returns Next cheapest market, or null if all markets tried
+   * Prefers markets with available nodes over empty ones.
    */
   async getNextBestMarket(excludeAddresses: string[]): Promise<GpuMarket | null> {
     const markets = await this.getMarkets();
     const excluded = new Set(excludeAddresses);
-    return markets.find(m => m.pricePerHour > 0 && m.type === 'PREMIUM' && !excluded.has(m.address)) || null;
+    const candidates = markets.filter(m =>
+      m.pricePerHour > 0 && m.type === 'PREMIUM' && !excluded.has(m.address)
+    );
+    if (candidates.length === 0) return null;
+
+    const withNodes = candidates.filter(m => m.nodesAvailable === undefined || m.nodesAvailable > 0);
+    return withNodes.length > 0 ? withNodes[0] : candidates[0];
   }
 
   /**

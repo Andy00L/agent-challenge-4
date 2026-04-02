@@ -67,7 +67,10 @@ export const nosanaPlugin: Plugin = {
       try {
         const markets = await manager.getMarkets();
         console.log('[AgentForge:Plugin] Available GPU markets:');
-        markets.forEach(m => console.log(`[AgentForge:Plugin]   ${m.name} (${m.gpu}): ${m.address} — $${m.pricePerHour}/hr`));
+        markets.forEach(m => {
+          const nodes = m.nodesAvailable !== undefined ? ` (${m.nodesAvailable} nodes available)` : '';
+          console.log(`[AgentForge:Plugin]   ${m.name} (${m.gpu}): ${m.address} — $${m.pricePerHour}/hr${nodes}`);
+        });
       } catch (e) {
         console.warn('[AgentForge:Plugin] Failed to fetch markets:', e);
       }

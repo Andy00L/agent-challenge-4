@@ -1054,6 +1054,9 @@ Respond with ONLY the JSON array:`,
       steps.map(s => `\u2022 **${s.name}** \u2014 ${s.task.slice(0, 80)}...`).join('\n')
     );
 
+    // Track markets that failed during this mission — avoid retrying them for subsequent steps
+    const coldMarkets = new Set<string>();
+
     const market = await manager.getBestMarket();
     if (!market) throw new Error('No GPU markets available');
     marketName = market.name;
@@ -1105,8 +1108,8 @@ Respond with ONLY the JSON array:`,
     };
 
     const waitReady = async (node: PipelineNode): Promise<boolean> => {
-      // Per-node tried addresses so failed markets don't penalize other nodes
-      const triedMarketAddresses: string[] = market ? [market.address] : [];
+      // Combine per-node tried addresses with mission-wide cold markets
+      const triedMarketAddresses: string[] = [...coldMarkets, ...(market ? [market.address] : [])];
       if (node.status === 'error' || !node.url) return false;
 
       // Attempt 1: wait on current deployment
@@ -1119,6 +1122,12 @@ Respond with ONLY the JSON array:`,
         return true;
       } catch (err: any) {
         log(`node:status — ${node.step.name}: waitForReady failed — ${err.message}`);
+      }
+
+      // Mark this market as cold for future steps in this mission
+      if (market) {
+        coldMarkets.add(market.address);
+        log(`Market ${market.name} marked cold (${coldMarkets.size} cold markets this mission)`);
       }
 
       // Attempt 2: redeploy on a different market

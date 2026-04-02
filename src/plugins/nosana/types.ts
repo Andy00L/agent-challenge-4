@@ -27,6 +27,7 @@ export interface GpuMarket {
   gpu: string;
   pricePerHour: number;
   type?: string;
+  nodesAvailable?: number;
 }
 
 // Fallback addresses (used only when API is unavailable)
