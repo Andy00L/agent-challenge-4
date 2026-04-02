@@ -1466,8 +1466,8 @@ Respond with ONLY the JSON array:`,
             status: stepStatusForClient(n),
             deploymentId: n.deploymentId,
             url: n.url,
-            market: marketName,
-            costPerHour: marketCost,
+            market: (n as any)._market || marketName,
+            costPerHour: (n as any)._marketCost || marketCost,
             outputPreview: n.output?.slice(0, 300),
             output: n.output,
             error: n.error,
@@ -1548,85 +1548,90 @@ Respond with ONLY the JSON array:`,
       }
     };
 
+    const WORKER_BOOT_TIMEOUT = 150_000; // 150s — some nodes need 100-120s to boot
+    const MAX_MARKET_ATTEMPTS = 3;
+
     const waitReady = async (node: PipelineNode): Promise<boolean> => {
-      // Combine per-node tried addresses with mission-wide cold markets
-      const triedMarketAddresses: string[] = [...coldMarkets, ...(market ? [market.address] : [])];
       if (node.status === 'error' || !node.url) return false;
 
-      // Attempt 1: wait on current deployment
-      try {
-        const client = new WorkerClient(node.url);
-        await client.waitForReady(90_000);
-        node.status = 'ready';
-        log(`node:status — ${node.step.name}: ready`);
-        syncState();
-        return true;
-      } catch (err: any) {
-        log(`node:status — ${node.step.name}: waitForReady failed — ${err.message}`);
-      }
+      const triedMarketAddresses: string[] = [...coldMarkets];
+      let currentMarket = market;
 
-      // Mark this market as cold for future steps in this mission
-      if (market) {
-        coldMarkets.add(market.address);
-        log(`Market ${market.name} marked cold (${coldMarkets.size} cold markets this mission)`);
-      }
-
-      // Attempt 2: redeploy on a different market
-      log(`node:status — ${node.step.name}: worker didn't boot — trying next GPU market`);
-      narrate(`\u{26A0}\u{FE0F} **${node.step.name}** worker didn't boot — retrying on different market...`);
-
-      try { if (node.deploymentId) await manager.stopDeployment(node.deploymentId); } catch (e) { log(`Failed to stop ${node.step.name}: ${e}`); }
-
-      const nextMarket = await manager.getNextBestMarket(triedMarketAddresses);
-      if (!nextMarket) {
-        node.status = 'error';
-        node.error = 'Worker failed to boot and no alternative markets available';
-        log(`node:status — ${node.step.name}: no alternative markets`);
-        syncState();
-        return false;
-      }
-      triedMarketAddresses.push(nextMarket.address);
-      log(`node:status — ${node.step.name}: redeploying on ${nextMarket.name}`);
-      narrate(`\u{1F504} Redeploying **${node.step.name}** on ${nextMarket.name}...`);
-
-      const tmpl = AGENT_TEMPLATES[node.step.template] || AGENT_TEMPLATES['researcher'];
-      try {
-        const newDep = await manager.createAndStartDeployment({
-          name: `mission-${node.step.name}`,
-          dockerImage: workerImage,
-          env: buildWorkerEnv({
-            AGENT_TEMPLATE: node.step.template,
-            AGENT_NAME: node.step.name,
-            AGENT_SYSTEM_PROMPT: tmpl.defaultPrompt,
-            AGENT_PLUGINS: tmpl.plugins.join(','),
-            SERVER_PORT: '3000',
-          }),
-          resolvedMarket: nextMarket,
-          timeout: 30,
-        });
-        node.deploymentId = newDep.id;
-        node.url = newDep.url;
-        syncState();
-
-        if (newDep.url) {
-          const client2 = new WorkerClient(newDep.url);
+      for (let attempt = 1; attempt <= MAX_MARKET_ATTEMPTS; attempt++) {
+        // Wait for worker to boot on current deployment
+        if (node.url) {
           try {
-            await client2.waitForReady(90_000);
+            const client = new WorkerClient(node.url);
+            await client.waitForReady(WORKER_BOOT_TIMEOUT);
             node.status = 'ready';
-            log(`node:status — ${node.step.name}: ready (fallback market ${nextMarket.name})`);
+            if (attempt > 1) {
+              log(`node:status — ${node.step.name}: ready (fallback market ${currentMarket?.name}, attempt ${attempt})`);
+              narrate(`\u{2705} **${node.step.name}** ready on ${currentMarket?.name} (fallback)`);
+            } else {
+              log(`node:status — ${node.step.name}: ready`);
+            }
             syncState();
             return true;
-          } catch (err2: any) {
-            log(`node:status — ${node.step.name}: fallback boot also failed — ${err2.message}`);
+          } catch (err: any) {
+            log(`node:status — ${node.step.name}: boot timeout on ${currentMarket?.name} (attempt ${attempt}/${MAX_MARKET_ATTEMPTS}) — ${err.message}`);
           }
         }
-      } catch (redeployErr: any) {
-        log(`node:status — ${node.step.name}: redeploy failed — ${redeployErr.message}`);
+
+        // Mark this market as cold
+        if (currentMarket) {
+          coldMarkets.add(currentMarket.address);
+          triedMarketAddresses.push(currentMarket.address);
+        }
+
+        // No more attempts left
+        if (attempt >= MAX_MARKET_ATTEMPTS) break;
+
+        // Redeploy on a different market
+        narrate(`\u{26A0}\u{FE0F} **${node.step.name}** timeout on ${currentMarket?.name} — trying another GPU...`);
+        try { if (node.deploymentId) await manager.stopDeployment(node.deploymentId); } catch (e) { log(`Failed to stop ${node.step.name}: ${e}`); }
+
+        const nextMarket = await manager.getNextBestMarket(triedMarketAddresses);
+        if (!nextMarket) {
+          log(`node:status — ${node.step.name}: no alternative markets for attempt ${attempt + 1}`);
+          break;
+        }
+
+        currentMarket = nextMarket;
+        log(`node:status — ${node.step.name}: redeploying on ${nextMarket.name} (attempt ${attempt + 1}/${MAX_MARKET_ATTEMPTS})`);
+        narrate(`\u{1F504} Redeploying **${node.step.name}** on ${nextMarket.name}...`);
+
+        const tmpl = AGENT_TEMPLATES[node.step.template] || AGENT_TEMPLATES['researcher'];
+        try {
+          const newDep = await manager.createAndStartDeployment({
+            name: `mission-${node.step.name}`,
+            dockerImage: workerImage,
+            env: buildWorkerEnv({
+              AGENT_TEMPLATE: node.step.template,
+              AGENT_NAME: node.step.name,
+              AGENT_SYSTEM_PROMPT: tmpl.defaultPrompt,
+              AGENT_PLUGINS: tmpl.plugins.join(','),
+              SERVER_PORT: '3000',
+            }),
+            resolvedMarket: nextMarket,
+            timeout: 30,
+          });
+          node.deploymentId = newDep.id;
+          node.url = newDep.url;
+          // Update per-node market info for UI (Fix 4)
+          (node as any)._market = nextMarket.name;
+          (node as any)._marketCost = nextMarket.pricePerHour;
+          syncState();
+        } catch (redeployErr: any) {
+          log(`node:status — ${node.step.name}: redeploy failed — ${redeployErr.message}`);
+          break; // Can't redeploy, give up
+        }
       }
 
+      // All attempts failed
       node.status = 'error';
-      node.error = 'Worker failed to boot after 2 attempts on different markets';
-      log(`node:status — ${node.step.name}: giving up after 2 attempts`);
+      node.error = `Worker failed to boot after ${MAX_MARKET_ATTEMPTS} attempts on different markets`;
+      log(`node:status — ${node.step.name}: FAILED after ${MAX_MARKET_ATTEMPTS} market attempts`);
+      narrate(`\u{274C} **${node.step.name}** failed to boot after ${MAX_MARKET_ATTEMPTS} attempts on different GPUs`);
       syncState();
       return false;
     };
@@ -2045,6 +2050,32 @@ Respond with ONLY the JSON array:`,
       if (booted > 0) {
         narrate(`\u{2705} **${booted} agents ready** — executing pipeline...`);
       }
+
+      // Cascade: mark dependents of failed workers as skipped
+      if (failed > 0) {
+        const failedWorkers = allGpuWorkers.filter(n => n.status === 'error');
+        for (const fw of failedWorkers) {
+          const dependents = nodes.filter(n => {
+            const deps = getDependencies(n.step);
+            return deps.includes(fw.step.id);
+          });
+          if (dependents.length > 0) {
+            const depNames = dependents.map(d => d.step.name).join(', ');
+            log(`Pipeline blocked: ${fw.step.name} failed → skipping dependents: ${depNames}`);
+            narrate(
+              `\u{274C} **${fw.step.name}** couldn't boot on any GPU market. ` +
+              `${depNames} depend on it and will be skipped.`
+            );
+            for (const dep of dependents) {
+              if (dep.status === 'pending' || dep.status === 'deploying') {
+                dep.status = 'skipped';
+                dep.output = `[Skipped: dependency ${fw.step.name} failed]`;
+              }
+            }
+          }
+        }
+        syncState();
+      }
     }
 
     // 2b. Execute level by level — workers are already booted, execute immediately
@@ -2067,6 +2098,21 @@ Respond with ONLY the JSON array:`,
       const levelNodes = levelStepIds.map(id => nodes.find(n => n.step.id === id)!).filter(Boolean);
 
       log(`level:${depth} — ${levelNodes.length} agent(s): ${levelNodes.map(n => n.step.name).join(', ')}`);
+
+      // Skip nodes whose dependencies failed or were skipped
+      for (const node of levelNodes) {
+        if (node.status === 'error' || node.status === 'skipped') continue;
+        const deps = getDependencies(node.step);
+        const failedDep = nodes.find(n =>
+          deps.includes(n.step.id) && (n.status === 'error' || n.status === 'skipped')
+        );
+        if (failedDep) {
+          node.status = 'skipped';
+          node.output = `[Skipped: dependency ${failedDep.step.name} failed]`;
+          log(`node:status — ${node.step.name}: skipped (dependency ${failedDep.step.name} failed)`);
+          syncState();
+        }
+      }
 
       // Split into text (need worker) and multimodal (direct execution)
       const textNodes = levelNodes.filter(n => !DIRECT_EXECUTION_TEMPLATES.includes(n.step.template));
@@ -2269,7 +2315,17 @@ Respond with ONLY the JSON array:`,
     }
 
     // 5. Cleanup (parallel to minimize credit burn during shutdown)
-    narrate(`\u{1F3C1} All agents complete \u2014 stopping ${nodes.filter(n => n.deploymentId).length} deployments to save credits...`);
+    const _succeeded = nodes.filter(n => n.status === 'complete').length;
+    const _failed = nodes.filter(n => n.status === 'error').length;
+    const _skipped = nodes.filter(n => n.status === 'skipped').length;
+    if (_failed > 0 || _skipped > 0) {
+      narrate(
+        `\u{26A0}\u{FE0F} Mission partially completed: ${_succeeded}/${nodes.length} steps succeeded` +
+        (_failed > 0 ? `, ${_failed} failed` : '') +
+        (_skipped > 0 ? `, ${_skipped} skipped` : '')
+      );
+    }
+    narrate(`\u{1F3C1} Stopping ${nodes.filter(n => n.deploymentId).length} deployments to save credits...`);
     log('Cleaning up mission agents...');
     await Promise.allSettled(
       nodes

@@ -28,6 +28,9 @@ export interface GpuMarket {
   gpu: string;
   pricePerHour: number;
   type?: string;
+  nodesAvailable?: number;
+  queueType?: number;
+  hasIdleNodes?: boolean;
 }
 
 interface FleetStore {

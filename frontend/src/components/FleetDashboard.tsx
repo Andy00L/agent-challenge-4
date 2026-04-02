@@ -246,6 +246,24 @@ export function FleetDashboard() {
                             ${market.pricePerHour.toFixed(3)}
                             <span className="text-xs text-muted-foreground font-normal">/hr</span>
                           </span>
+                          <div className="flex items-center gap-1 mt-1">
+                            {market.hasIdleNodes ? (
+                              <>
+                                <div className="w-1.5 h-1.5 rounded-full bg-green-400" />
+                                <span className="text-[10px] text-green-400">{market.nodesAvailable} idle</span>
+                              </>
+                            ) : market.queueType === 1 ? (
+                              <>
+                                <div className="w-1.5 h-1.5 rounded-full bg-yellow-400" />
+                                <span className="text-[10px] text-yellow-400">busy</span>
+                              </>
+                            ) : (
+                              <>
+                                <div className="w-1.5 h-1.5 rounded-full bg-zinc-500" />
+                                <span className="text-[10px] text-zinc-500">queued</span>
+                              </>
+                            )}
+                          </div>
                         </CardContent></Card>
                       </TooltipTrigger>
                       <TooltipContent>
