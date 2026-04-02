@@ -153,67 +153,6 @@ export class WorkerClient {
   }
 
   /**
-   * After receiving an initial response from a researcher agent, poll for a
-   * web-enriched follow-up response (the REPLY → WEB_SEARCH → REPLY pattern).
-   * Returns the longest response found, which is typically the web-enriched one.
-   */
-  private async waitForEnrichedResponse(
-    channelId: string,
-    existingIds: Set<string>,
-    initialResponse: string,
-    inputText: string,
-    checkAlive?: () => boolean,
-  ): Promise<string> {
-    console.log('[AgentForge:Worker] Researcher mode: waiting up to 90s for web-enriched response...');
-    let bestResponse = initialResponse;
-    const enrichStart = Date.now();
-    const ENRICH_TIMEOUT = 90_000;
-
-    while (Date.now() - enrichStart < ENRICH_TIMEOUT) {
-      if (checkAlive && !checkAlive()) {
-        console.log('[AgentForge:Worker] Deployment stopped during enrichment wait, using current best');
-        break;
-      }
-
-      await new Promise(r => setTimeout(r, 5_000));
-
-      try {
-        const msgs = await this.getChannelMessages(channelId, 30);
-        for (const m of msgs) {
-          if (existingIds.has(m.id)) continue;
-          if ((m.authorId || m.author_id) === ORCHESTRATOR_USER_ID) continue;
-          const c = typeof m.content === 'string' ? m.content : m.content?.text || '';
-          if (c.length > bestResponse.length && c !== inputText && !isIntermediateResponse(c)) {
-            console.log(`[AgentForge:Worker] Found enriched response (${c.length} > ${bestResponse.length} chars)`);
-            bestResponse = c;
-          }
-        }
-      } catch (e) {
-        console.warn('[AgentForge:Worker] Error polling for enriched response:', e);
-      }
-
-      // If we found something better after waiting 30s, that's good enough
-      if (bestResponse.length > initialResponse.length && Date.now() - enrichStart > 30_000) {
-        console.log('[AgentForge:Worker] Enriched response confirmed after 30s, proceeding');
-        break;
-      }
-
-      const elapsed = Math.floor((Date.now() - enrichStart) / 1000);
-      if (elapsed % 15 === 0 && elapsed > 0) {
-        console.log(`[AgentForge:Worker] Enrichment wait: ${elapsed}s (best: ${bestResponse.length} chars)`);
-      }
-    }
-
-    if (bestResponse.length > initialResponse.length) {
-      console.log(`[AgentForge:Worker] Using web-enriched response (${bestResponse.length} chars, +${bestResponse.length - initialResponse.length} from web)`);
-    } else {
-      console.log(`[AgentForge:Worker] No enriched response found, using initial (${initialResponse.length} chars)`);
-    }
-
-    return bestResponse;
-  }
-
-  /**
    * Extract text content from an agentResponse field (string or object).
    * Returns null if the content is empty, too short, or looks like metadata.
    */
@@ -272,7 +211,7 @@ export class WorkerClient {
     text: string,
     timeoutMs = 300_000,
     checkAlive?: () => boolean,
-    waitForEnrichment = false,
+    _waitForEnrichment = false,
     abortSignal?: AbortSignal,
   ): Promise<string> {
     // 1. Get or create DM channel
@@ -396,9 +335,8 @@ export class WorkerClient {
       const finalText = this.validateFinalResponse(httpResponseText);
       if (finalText) {
         console.log(`[AgentForge:Worker] Got final agentResponse from HTTP (${finalText.length} chars)`);
-        if (waitForEnrichment) {
-          return this.waitForEnrichedResponse(channelId, existingIds, finalText, text, checkAlive);
-        }
+        // Skip enrichment wait — orchestrator pre-searches Tavily and injects results
+        // into the prompt, so the first HTTP response is already the final answer.
         return finalText;
       }
       // Intermediate response — fall through to polling to get the real answer
@@ -492,9 +430,6 @@ export class WorkerClient {
 
           if (!intermed) {
             console.log(`[AgentForge:Worker] ✓ FINAL RESPONSE found (poll, ${responseText.length} chars)`);
-            if (waitForEnrichment) {
-              return this.waitForEnrichedResponse(channelId, existingIds, responseText, text, checkAlive);
-            }
             return responseText;
           }
         }
