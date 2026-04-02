@@ -1816,65 +1816,70 @@ Respond with ONLY the JSON array:`,
           const hasNosana = !!(process.env.NOSANA_API_KEY && process.env.NOSANA_API_KEY !== 'YOUR_NOSANA_API_KEY');
 
           // Try to boot SD 1.5 once for remaining scenes (skip if all covered by siblings)
+          const { setNosanaImageService, markNosanaImageFailed } = await import('./imageGenRouter.js');
           if (scenesNeedingImages.length > 0 && hasNosana && !sd15Failed) {
             try {
               const { IMAGE_SERVICE } = await import('./mediaServiceDefinitions.js');
               narrate(`\u{1F680} Booting SD 1.5 on Nosana GPU...`);
               sd15Url = await manager.deployMediaService(IMAGE_SERVICE);
               log(`SD 1.5 ready at ${sd15Url}`);
+              setNosanaImageService(sd15Url); // Share warm container with imageGenRouter
             } catch (bootErr: any) {
-              log(`SD 1.5 boot failed: ${bootErr.message} — will use DALL-E/fal.ai per image`);
+              log(`SD 1.5 boot failed: ${bootErr.message} — will use DALL-E/fal.ai`);
               sd15Failed = true;
+              markNosanaImageFailed();
             }
           }
 
-          const { A1111Client: A1111 } = await import('./a1111Client.js');
+          const scenesToGenerate = scenesNeedingImages.slice(0, 6);
 
-          for (const scene of scenesNeedingImages.slice(0, 6)) {
-            let imgResult: { base64?: string; url?: string } | null = null;
-
-            // Try warm SD 1.5 first
-            if (sd15Url && !sd15Failed) {
+          if (sd15Url && !sd15Failed) {
+            // SD 1.5 mode: sequential on warm container (~2s per image)
+            const { A1111Client: A1111 } = await import('./a1111Client.js');
+            for (const scene of scenesToGenerate) {
+              const prompt = scene.imagePrompt || scene.narration || `Scene ${scene.sceneNumber}`;
               try {
                 narrate(`\u{1F3A8} Scene ${scene.sceneNumber}: generating with SD 1.5...`);
                 const client = new A1111(sd15Url);
-                const result = await client.generateImage(scene.imagePrompt || scene.narration || `Scene ${scene.sceneNumber}`, '', 512, 512);
-                imgResult = { base64: result.base64 };
+                const result = await client.generateImage(prompt, '', 512, 512);
+                const imagePath = await assembler.downloadMedia(`data:image/png;base64,${result.base64}`, `scene-${scene.sceneNumber}.png`);
+                sceneMedias.push({ sceneNumber: scene.sceneNumber, imagePath, durationSeconds: scene.durationSeconds, title: scene.title });
                 log(`Scene ${scene.sceneNumber} generated via SD 1.5`);
               } catch (sdErr: any) {
-                log(`SD 1.5 generation failed for scene ${scene.sceneNumber}: ${sdErr.message} — switching to API backends`);
+                log(`SD 1.5 generation failed for scene ${scene.sceneNumber}: ${sdErr.message} — switching to DALL-E for remaining`);
                 sd15Failed = true;
+                markNosanaImageFailed();
+                break; // Switch to parallel DALL-E for remaining scenes
               }
             }
+          }
 
-            // API backend fallback (DALL-E, fal.ai, etc.)
-            if (!imgResult) {
-              try {
-                narrate(`\u{1F3A8} Scene ${scene.sceneNumber}: generating image...`);
-                imgResult = await ImageGenRouter.generate(scene.imagePrompt || scene.narration || `Scene ${scene.sceneNumber}`);
-              } catch (imgErr: any) {
-                log(`Scene ${scene.sceneNumber} all backends failed: ${imgErr.message}`);
-              }
-            }
+          // DALL-E/API mode: generate remaining images in parallel (Promise.all)
+          const remainingScenes = scenesToGenerate.filter(s => !sceneMedias.some(m => m.sceneNumber === s.sceneNumber));
+          if (remainingScenes.length > 0) {
+            log(`Generating ${remainingScenes.length} images via API backends (parallel)`);
+            narrate(`\u{1F3A8} Generating ${remainingScenes.length} scene images in parallel...`);
 
-            if (imgResult) {
+            const imagePromises = remainingScenes.map(async (scene) => {
+              const prompt = scene.imagePrompt || scene.narration || `Scene ${scene.sceneNumber}`;
               try {
+                const imgResult = await ImageGenRouter.generate(prompt);
                 let imgSource: string;
-                if (imgResult.url) {
-                  imgSource = imgResult.url;
-                } else if (imgResult.base64) {
-                  imgSource = `data:image/png;base64,${imgResult.base64}`;
-                } else {
-                  continue;
-                }
+                if (imgResult.url) imgSource = imgResult.url;
+                else if (imgResult.base64) imgSource = `data:image/png;base64,${imgResult.base64}`;
+                else return null;
                 const imagePath = await assembler.downloadMedia(imgSource, `scene-${scene.sceneNumber}.png`);
-                sceneMedias.push({
-                  sceneNumber: scene.sceneNumber, imagePath,
-                  durationSeconds: scene.durationSeconds, title: scene.title,
-                });
-              } catch (dlErr: any) {
-                log(`Scene ${scene.sceneNumber} download failed: ${dlErr.message}`);
+                log(`Scene ${scene.sceneNumber} generated via API`);
+                return { sceneNumber: scene.sceneNumber, imagePath, durationSeconds: scene.durationSeconds, title: scene.title };
+              } catch (imgErr: any) {
+                log(`Scene ${scene.sceneNumber} image failed: ${imgErr.message}`);
+                return null;
               }
+            });
+
+            const results = await Promise.all(imagePromises);
+            for (const r of results) {
+              if (r) sceneMedias.push(r);
             }
           }
 
@@ -1965,7 +1970,26 @@ Respond with ONLY the JSON array:`,
           node.status = 'processing';
           syncState('executing');
           narrate(`\u{1F50A} **${node.step.name}** generating audio narration...`);
-          const ttsResult = await generateTTS(inputText);
+
+          // Get the ACTUAL SCRIPT from parent node — NOT the task instruction
+          let textToSpeak = '';
+          const parentIds = getDependencies(node.step);
+          for (const depId of parentIds) {
+            const parentNode = nodes.find(n => n.step.id === depId);
+            if (parentNode?.output && parentNode.output.length > 20) {
+              textToSpeak = parentNode.output;
+              break;
+            }
+          }
+          // Fallback: strip common instruction prefixes from task
+          if (!textToSpeak || textToSpeak.length < 10) {
+            textToSpeak = node.step.task
+              .replace(/^(Convert|Generate|Create|Produce|Read|Narrate)\s+.*?(script|text|narration|audio)\s*(about|for|on|from)?\s*/i, '')
+              .trim() || node.step.task;
+          }
+          log(`Narrator TTS input: "${textToSpeak.slice(0, 100)}..." (${textToSpeak.length} chars from ${parentIds.length > 0 ? 'parent output' : 'task'})`);
+
+          const ttsResult = await generateTTS(textToSpeak);
           if (ttsResult) {
             const audioId = `audio-${Date.now()}`;
             const audioUrl = storeMediaBuffer(audioId, ttsResult.audio, ttsResult.mimeType);
@@ -1998,7 +2022,32 @@ Respond with ONLY the JSON array:`,
       }
     };
 
-    // 2. Execute level by level — nodes at each level run in parallel
+    // 2a. PRE-BOOT: Deploy ALL GPU workers from all depth levels simultaneously
+    const allGpuWorkers = nodes.filter(n => !DIRECT_EXECUTION_TEMPLATES.includes(n.step.template));
+    if (allGpuWorkers.length > 0) {
+      log(`Pre-booting ${allGpuWorkers.length} workers in parallel across all depth levels...`);
+      narrate(`\u{1F680} **Deploying ${allGpuWorkers.length} agents simultaneously** across Nosana GPU network...`);
+
+      await Promise.allSettled(
+        allGpuWorkers.map(async (node) => {
+          try {
+            await deployOne(node);
+            await waitReady(node);
+          } catch (err: any) {
+            log(`Pre-boot failed for ${node.step.name}: ${err.message}`);
+          }
+        })
+      );
+
+      const booted = allGpuWorkers.filter(n => n.status === 'ready').length;
+      const failed = allGpuWorkers.filter(n => n.status === 'error').length;
+      log(`Pre-boot complete: ${booted} ready, ${failed} failed out of ${allGpuWorkers.length}`);
+      if (booted > 0) {
+        narrate(`\u{2705} **${booted} agents ready** — executing pipeline...`);
+      }
+    }
+
+    // 2b. Execute level by level — workers are already booted, execute immediately
     for (let depth = 0; depth <= maxDepth; depth++) {
       // Check for abort before each depth level
       if (isAborted()) {
@@ -2023,34 +2072,37 @@ Respond with ONLY the JSON array:`,
       const textNodes = levelNodes.filter(n => !DIRECT_EXECUTION_TEMPLATES.includes(n.step.template));
       const multimodalNodes = levelNodes.filter(n => DIRECT_EXECUTION_TEMPLATES.includes(n.step.template));
 
-      // Deploy text nodes (worker-based) — with proactive credit check
+      // Deploy text nodes — skip if already pre-booted
       if (textNodes.length > 0) {
-        // Check credits before deploying this level's workers
-        if (marketCost && marketCost > 0) {
-          try {
-            const credits = await manager.getCreditsBalance();
-            const minRequired = marketCost * (5 / 60) * textNodes.length; // at least 5 min per node
-            if (credits && credits.balance < minRequired) {
-              narrate(
-                `\u{26A0}\u{FE0F} **Insufficient credits** ($${credits.balance.toFixed(3)} remaining). ` +
-                `Need ~$${minRequired.toFixed(3)} for ${textNodes.length} agent(s). ` +
-                `Delivering partial results. Top up at deploy.nosana.com.`
-              );
-              for (const n of textNodes) {
-                n.status = 'skipped';
-                n.output = '[Skipped: insufficient credits]';
+        const needDeploy = textNodes.filter(n => n.status !== 'ready' && n.status !== 'error');
+        if (needDeploy.length > 0) {
+          // Check credits before deploying stragglers
+          if (marketCost && marketCost > 0) {
+            try {
+              const credits = await manager.getCreditsBalance();
+              const minRequired = marketCost * (5 / 60) * needDeploy.length;
+              if (credits && credits.balance < minRequired) {
+                narrate(
+                  `\u{26A0}\u{FE0F} **Insufficient credits** ($${credits.balance.toFixed(3)} remaining). ` +
+                  `Need ~$${minRequired.toFixed(3)} for ${needDeploy.length} agent(s). ` +
+                  `Delivering partial results. Top up at deploy.nosana.com.`
+                );
+                for (const n of needDeploy) {
+                  n.status = 'skipped';
+                  n.output = '[Skipped: insufficient credits]';
+                }
+                syncState();
+                if (textNodes.every(n => n.status === 'skipped' || n.status === 'error')) continue;
               }
-              syncState();
-              continue; // skip to next depth level
-            }
-          } catch { /* don't block on API errors */ }
-        }
+            } catch { /* don't block on API errors */ }
+          }
 
-        for (const n of textNodes) {
-          narrate(`\u{1F680} Deploying **${n.step.name}** to ${marketName} ($${marketCost?.toFixed(3)}/hr)...`);
+          for (const n of needDeploy) {
+            narrate(`\u{1F680} Deploying **${n.step.name}** to ${marketName} ($${marketCost?.toFixed(3)}/hr)...`);
+          }
+          await Promise.all(needDeploy.map(n => deployOne(n)));
+          await Promise.all(needDeploy.map(n => waitReady(n)));
         }
-        await Promise.all(textNodes.map(n => deployOne(n)));
-        await Promise.all(textNodes.map(n => waitReady(n)));
       }
 
       // Execute multimodal nodes directly (no deployment)
@@ -2229,6 +2281,8 @@ Respond with ONLY the JSON array:`,
     );
     // Stop dynamically deployed media services
     try { await manager.stopAllMediaServices(); log('Media services stopped'); } catch (e) { log(`Media service cleanup failed: ${e}`); }
+    // Reset shared image generation state for next mission
+    try { const { resetNosanaImageState } = await import('./imageGenRouter.js'); resetNosanaImageState(); } catch { /* best effort */ }
     // Evict expired media to prevent unbounded memory growth
     clearExpiredMedia();
 

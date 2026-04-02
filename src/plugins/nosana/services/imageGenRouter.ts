@@ -7,6 +7,39 @@ import { A1111Client } from './a1111Client.js';
 
 export type ImageGenBackend = 'nosana-sd15' | 'openai-dalle' | 'fal' | 'a1111' | 'comfyui' | 'none';
 
+// ── Shared SD 1.5 container state ───────────────────────
+// Persists across calls within a mission. VideoAssembler boots SD 1.5 once
+// and shares it here so per-image calls reuse the warm container.
+
+let _nosanaImageServiceUrl: string | null = null;
+let _nosanaImageFailed = false;
+let _nosanaImageFailedAt = 0;
+
+/** Called by VideoAssembler when it successfully boots SD 1.5 */
+export function setNosanaImageService(url: string) {
+  _nosanaImageServiceUrl = url;
+  _nosanaImageFailed = false;
+  console.log(`[AgentForge:ImageGen] Warm SD 1.5 container registered: ${url}`);
+}
+
+/** Called when SD 1.5 fails (anywhere) — prevents retries for 10 min */
+export function markNosanaImageFailed() {
+  _nosanaImageFailed = true;
+  _nosanaImageFailedAt = Date.now();
+  _nosanaImageServiceUrl = null;
+}
+
+/** Called at mission cleanup to reset state */
+export function resetNosanaImageState() {
+  _nosanaImageServiceUrl = null;
+  _nosanaImageFailed = false;
+  _nosanaImageFailedAt = 0;
+}
+
+function shouldSkipNosana(): boolean {
+  return _nosanaImageFailed && (Date.now() - _nosanaImageFailedAt) < 10 * 60 * 1000;
+}
+
 // ── DALL-E safety prompt sanitization ───────────────────
 
 const UNSAFE_PATTERNS = [
@@ -106,20 +139,34 @@ export class ImageGenRouter {
     const openaiKey = process.env.OPENAI_API_KEY;
     const openaiUrl = process.env.OPENAI_API_URL || '';
 
-    // Backend 1: SD 1.5 on Nosana GPU (boot once, reuse for subsequent calls)
-    if (process.env.NOSANA_API_KEY && process.env.NOSANA_API_KEY !== 'YOUR_NOSANA_API_KEY') {
+    // Backend 1a: Warm SD 1.5 container (already booted by VideoAssembler)
+    if (_nosanaImageServiceUrl && !shouldSkipNosana()) {
       try {
-        console.log('[AgentForge:ImageGen] Trying SD 1.5 on Nosana GPU...');
+        console.log('[AgentForge:ImageGen] Using warm SD 1.5 container');
+        const client = new A1111Client(_nosanaImageServiceUrl);
+        const result = await client.generateImage(prompt, '', width, height);
+        return { base64: result.base64 };
+      } catch (err: any) {
+        console.warn(`[AgentForge:ImageGen] Warm SD 1.5 failed: ${err.message} — marking failed`);
+        markNosanaImageFailed();
+      }
+    }
+
+    // Backend 1b: Fresh SD 1.5 deploy (only if not recently failed)
+    if (!shouldSkipNosana() && process.env.NOSANA_API_KEY && process.env.NOSANA_API_KEY !== 'YOUR_NOSANA_API_KEY') {
+      try {
+        console.log('[AgentForge:ImageGen] Trying fresh SD 1.5 on Nosana GPU...');
         const { getNosanaManager } = await import('./nosanaManager.js');
         const { IMAGE_SERVICE } = await import('./mediaServiceDefinitions.js');
         const manager = getNosanaManager();
         const serviceUrl = await manager.deployMediaService(IMAGE_SERVICE);
+        setNosanaImageService(serviceUrl); // Share with future calls
         const client = new A1111Client(serviceUrl);
         const result = await client.generateImage(prompt, '', width, height);
-        console.log('[AgentForge:ImageGen] SD 1.5 Nosana success');
         return { base64: result.base64 };
       } catch (err: any) {
         console.warn(`[AgentForge:ImageGen] SD 1.5 Nosana failed: ${err.message}, trying next`);
+        markNosanaImageFailed();
       }
     }
 
