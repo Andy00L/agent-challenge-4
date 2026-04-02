@@ -18,7 +18,7 @@ export const MEDIA_SERVICES: Record<string, MediaServiceConfig> = {
     port: 8188,
     healthCheckPath: '/api/v1/models',
     minVramGB: 12,
-    preferredMarket: 'NVIDIA RTX 3090',
+    preferredMarket: 'NVIDIA 3090',
     bootTimeoutMs: 180_000,
     jobDefinition: {
       version: '0.1',
@@ -47,7 +47,7 @@ export const MEDIA_SERVICES: Record<string, MediaServiceConfig> = {
     port: 8188,
     healthCheckPath: '/api/v1/models',
     minVramGB: 8,
-    preferredMarket: 'NVIDIA RTX 3080',
+    preferredMarket: 'NVIDIA 3080',
     bootTimeoutMs: 180_000,
     jobDefinition: {
       version: '0.1',
@@ -76,8 +76,8 @@ export const MEDIA_SERVICES: Record<string, MediaServiceConfig> = {
     port: 8188,
     healthCheckPath: '/api/v1/models',
     minVramGB: 22,
-    preferredMarket: 'NVIDIA RTX 4090',
-    bootTimeoutMs: 300_000,
+    preferredMarket: 'NVIDIA 4090',
+    bootTimeoutMs: 120_000,
     jobDefinition: {
       version: '0.1',
       type: 'container',
@@ -131,7 +131,7 @@ export const MEDIA_SERVICES: Record<string, MediaServiceConfig> = {
     port: 5002,
     healthCheckPath: '/api/tts?text=test',
     minVramGB: 4,
-    preferredMarket: 'NVIDIA RTX 3060',
+    preferredMarket: 'NVIDIA 3060',
     bootTimeoutMs: 300_000,
     jobDefinition: {
       version: '0.1',
@@ -155,7 +155,7 @@ export const MEDIA_SERVICES: Record<string, MediaServiceConfig> = {
     port: 7860,
     healthCheckPath: '/sdapi/v1/sd-models',
     minVramGB: 4,
-    preferredMarket: 'NVIDIA RTX 3060',
+    preferredMarket: 'NVIDIA 3060',
     bootTimeoutMs: 180_000,
     jobDefinition: {
       version: '0.1',

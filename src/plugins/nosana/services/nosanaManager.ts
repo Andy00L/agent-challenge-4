@@ -473,11 +473,32 @@ export class NosanaManager {
     const q = query.toLowerCase().replace(/[^a-z0-9]/g, '');
     // Only premium markets — community markets reject credit payments
     const premium = markets.filter(m => m.type === 'PREMIUM');
-    return premium.find(m =>
+
+    // Exact normalized substring match (original logic)
+    const exact = premium.find(m =>
       m.slug.replace(/[^a-z0-9]/g, '').includes(q) ||
       m.name.toLowerCase().replace(/[^a-z0-9]/g, '').includes(q) ||
       m.gpu.toLowerCase().replace(/[^a-z0-9]/g, '').includes(q)
-    ) || null;
+    );
+    if (exact) return exact;
+
+    // Fuzzy: extract GPU model number (e.g., "4090", "a100") and match on that.
+    // Handles cases where preferred name has extra words like "RTX" that API names omit.
+    const modelMatch = query.match(/\b(3060|3070|3080|3090|4060|4070|4080|4090|a100|a10g?|h100|l4|l40)\b/i);
+    if (modelMatch) {
+      const model = modelMatch[1].toLowerCase();
+      const hit = premium.find(m =>
+        m.name.toLowerCase().includes(model) ||
+        m.gpu.toLowerCase().includes(model) ||
+        m.slug.toLowerCase().includes(model)
+      );
+      if (hit) {
+        console.log(`[AgentForge:Manager] Fuzzy market match: "${query}" → "${hit.name}" (matched GPU model "${model}")`);
+        return hit;
+      }
+    }
+
+    return null;
   }
 
   /**
@@ -744,6 +765,21 @@ export class NosanaManager {
     market: GpuMarket,
     safeName: string,
   ): Promise<string> {
+    // Log resources included in the job spec for debugging
+    const ops = config.jobDefinition?.ops;
+    if (Array.isArray(ops) && ops.length > 0) {
+      const resources = ops[0]?.args?.resources;
+      if (Array.isArray(resources) && resources.length > 0) {
+        console.log(`[AgentForge:Manager] Media job includes ${resources.length} resource download(s):`);
+        for (const r of resources) {
+          if (r.type === 'S3') console.log(`  S3: ${r.url} → ${r.target}`);
+          if (r.type === 'HF') console.log(`  HF: ${r.repo} (${r.files?.length || 0} files) → ${r.target}`);
+        }
+      } else {
+        console.warn(`[AgentForge:Manager] WARNING: Media job for ${config.name} has NO resource downloads — models may be missing`);
+      }
+    }
+
     const deploymentBody = {
       name: safeName,
       market: market.address,

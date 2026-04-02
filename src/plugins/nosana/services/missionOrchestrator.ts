@@ -616,6 +616,52 @@ function deduplicateOutput(text: string): string {
   return kept;
 }
 
+// ── Scene parser for slideshow fallback ──────────────────
+
+interface ParsedScene {
+  sceneNumber: number;
+  title: string;
+  narration: string;
+  imagePrompt: string;
+  durationSeconds: number;
+}
+
+/**
+ * Parse scene descriptions from scene-writer output or raw text.
+ * Handles JSON arrays, wrapped JSON, and plain text paragraphs.
+ */
+function parseScenes(output: string | undefined): ParsedScene[] {
+  if (!output) return [];
+  try {
+    const cleaned = output.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const parsed = JSON.parse(cleaned);
+    const arr = Array.isArray(parsed) ? parsed : (parsed.scenes && Array.isArray(parsed.scenes)) ? parsed.scenes : null;
+    if (arr) {
+      return arr.map((s: any, i: number) => ({
+        sceneNumber: s.sceneNumber || i + 1,
+        title: s.title || `Scene ${i + 1}`,
+        narration: s.narration || s.text || '',
+        imagePrompt: s.imagePrompt || s.image_prompt || s.description || s.narration || '',
+        durationSeconds: s.durationSeconds || s.duration || 6,
+      }));
+    }
+  } catch {
+    // Try extracting JSON array from mixed text
+    const jsonMatch = output.match(/\[[\s\S]*\]/);
+    if (jsonMatch) {
+      try { return parseScenes(jsonMatch[0]); } catch { /* fall through */ }
+    }
+  }
+  // Fallback: create scenes from text paragraphs
+  return output.split('\n\n').filter(p => p.trim().length > 20).slice(0, 4).map((p, i) => ({
+    sceneNumber: i + 1,
+    title: `Scene ${i + 1}`,
+    narration: p.trim(),
+    imagePrompt: p.trim().slice(0, 200),
+    durationSeconds: 6,
+  }));
+}
+
 // ── Orchestrator ─────────────────────────────────────────
 
 export class MissionOrchestrator {
@@ -1382,11 +1428,98 @@ Respond with ONLY the JSON array:`,
           log(`node:status — ${node.step.name}: complete (video)`);
           syncState();
         } catch (err: any) {
-          narrate(`\u{26A0}\u{FE0F} **Video generation failed** for "${node.step.name}": ${err.message}. Continuing pipeline.`);
-          node.status = 'error';
-          node.error = err.message;
-          node.output = `[Video generation failed: ${err.message}]`;
-          syncState();
+          // GPU video generation failed — try DALL-E slideshow fallback
+          log(`Video GPU gen failed: ${err.message}, falling back to DALL-E slideshow`);
+          narrate(`\u{26A0}\u{FE0F} **GPU video generation failed.** Falling back to DALL-E slideshow...`);
+
+          try {
+            if (!ImageGenRouter.isAvailable()) {
+              throw new Error('Image generation not available for slideshow fallback');
+            }
+
+            // 1. Parse scene descriptions from scene-writer sibling
+            const sceneWriterSibling = nodes.find(n => n.step.template === 'scene-writer' && n.status === 'complete');
+            const scenes = parseScenes(sceneWriterSibling?.output || inputText);
+            if (scenes.length === 0) {
+              throw new Error('No scenes available for slideshow');
+            }
+
+            // 2. Generate DALL-E images for each scene
+            const assembler = new MediaAssembler();
+            const sceneMedias: Array<{ sceneNumber: number; imagePath: string; durationSeconds: number; title: string }> = [];
+
+            for (const scene of scenes.slice(0, 4)) {
+              try {
+                narrate(`\u{1F3A8} Generating image for scene ${scene.sceneNumber}: ${scene.title}`);
+                const imgResult = await ImageGenRouter.generate(scene.imagePrompt);
+                let imgSource: string;
+                if (imgResult.url) {
+                  imgSource = imgResult.url;
+                } else if (imgResult.base64) {
+                  imgSource = `data:image/png;base64,${imgResult.base64}`;
+                } else {
+                  continue;
+                }
+                const imagePath = await assembler.downloadMedia(imgSource, `scene-${scene.sceneNumber}.png`);
+                sceneMedias.push({
+                  sceneNumber: scene.sceneNumber,
+                  imagePath,
+                  durationSeconds: scene.durationSeconds,
+                  title: scene.title,
+                });
+              } catch (imgErr: any) {
+                log(`Failed to generate slideshow image for scene ${scene.sceneNumber}: ${imgErr.message}`);
+              }
+            }
+
+            // 3. Get narrator audio if available (narrator may still be running in parallel)
+            const narratorSibling = nodes.find(n => n.step.template === 'narrator' && n.status === 'complete');
+            let audioPath: string | null = null;
+            if (narratorSibling?.outputUrls?.[0]) {
+              try {
+                audioPath = await assembler.downloadMedia(narratorSibling.outputUrls[0], 'narration.mp3');
+              } catch { /* proceed without audio */ }
+            }
+
+            // 4. Assemble slideshow
+            if (sceneMedias.length >= 1) {
+              const videoPath = await assembler.assembleSlideshow(sceneMedias, audioPath);
+              if (videoPath.endsWith('.mp4')) {
+                const videoId = `video-slideshow-${Date.now()}`;
+                const { readFileSync: readFs } = await import('fs');
+                const mediaUrl = storeMediaBuffer(videoId, readFs(videoPath), 'video/mp4');
+                node.output = mediaUrl;
+                node.outputType = 'video';
+                node.outputUrls = [mediaUrl];
+                node.status = 'complete';
+                log(`node:status — ${node.step.name}: complete (slideshow fallback, ${sceneMedias.length} scenes)`);
+                narrate(`\u{2705} **Slideshow video assembled!** ${sceneMedias.length} scenes${audioPath ? ', with narration' : ''}`);
+              } else {
+                // Markdown fallback (FFmpeg not available)
+                const { readFileSync: readFs } = await import('fs');
+                const mdId = `md-slideshow-${Date.now()}`;
+                const mediaUrl = storeMediaBuffer(mdId, readFs(videoPath), 'text/markdown');
+                node.output = mediaUrl;
+                node.outputType = 'text';
+                node.outputUrls = [mediaUrl];
+                node.status = 'complete';
+                log(`node:status — ${node.step.name}: complete (markdown fallback, no FFmpeg)`);
+                narrate(`\u{2705} **Slideshow created as document** (FFmpeg not available for video assembly)`);
+              }
+              syncState();
+            } else {
+              throw new Error(`No images generated for slideshow (0/${scenes.length} scenes succeeded)`);
+            }
+
+            assembler.cleanup();
+          } catch (slideshowErr: any) {
+            log(`Slideshow fallback also failed: ${slideshowErr.message}`);
+            narrate(`\u{26A0}\u{FE0F} **Video and slideshow fallback both failed**: ${slideshowErr.message}. Continuing pipeline.`);
+            node.status = 'error';
+            node.error = `GPU: ${err.message}; Slideshow: ${slideshowErr.message}`;
+            node.output = `[Video generation failed: ${err.message}. Slideshow fallback: ${slideshowErr.message}]`;
+            syncState();
+          }
         }
         return;
       }
