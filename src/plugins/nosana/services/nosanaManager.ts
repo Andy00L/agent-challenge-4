@@ -421,8 +421,6 @@ export class NosanaManager {
     );
   }
 
-  private _marketFieldsLogged = false;
-
   async getMarkets(): Promise<GpuMarket[]> {
     if (this.cachedMarkets.length > 0 && Date.now() - this.lastMarketFetch < 120_000) {
       return this.cachedMarkets;
@@ -438,23 +436,16 @@ export class NosanaManager {
     try {
       const apiMarkets = await this.client.api.markets.list();
 
-      // One-time debug: log raw API fields so we know what's available
-      if (!this._marketFieldsLogged && apiMarkets[0]) {
-        this._marketFieldsLogged = true;
-        console.log('[AgentForge:Debug] Raw market fields:', Object.keys(apiMarkets[0]));
-      }
-
       const markets: GpuMarket[] = apiMarkets.map((m: any) => {
         const reward = typeof m.usd_reward_per_hour === 'number' ? m.usd_reward_per_hour : 0;
         const fee = typeof m.network_fee_percentage === 'number' ? m.network_fee_percentage : 10;
         const userCost = reward * (1 + fee / 100);
 
-        // Map node availability — try common Nosana API field names
-        const nodes: number | undefined =
-          typeof m.nodes_in_queue === 'number' ? m.nodes_in_queue :
-          typeof m.nodesInQueue === 'number' ? m.nodesInQueue :
-          typeof m.available_nodes === 'number' ? m.available_nodes :
-          typeof m.queue_length === 'number' ? m.queue_length :
+        // Map node availability from the "nodes" field
+        const rawNodes = m.nodes;
+        const nodesAvailable: number | undefined =
+          typeof rawNodes === 'number' ? rawNodes :
+          Array.isArray(rawNodes) ? rawNodes.length :
           undefined;
 
         return {
@@ -464,7 +455,7 @@ export class NosanaManager {
           gpu: (m.gpu_types || []).join(', ') || m.slug || '',
           pricePerHour: Math.round(userCost * 1000) / 1000,
           type: m.type || 'PREMIUM',
-          nodesAvailable: nodes,
+          nodesAvailable,
         };
       });
       markets.sort((a, b) => a.pricePerHour - b.pricePerHour);
