@@ -17,6 +17,7 @@ import {
   disconnectSocket,
 } from '../lib/elizaClient';
 import { setFleetAgentId, pollFleetOnce } from '../lib/fleetPoller';
+import { fleetFetch } from '../lib/fleetFetch';
 import { useMissionStore } from '../stores/missionStore';
 import { renderMarkdown } from '../lib/markdown';
 
@@ -41,6 +42,7 @@ interface MissionHistoryEntry {
   status: 'complete' | 'error';
   stepsCount: number;
   totalTime: number;
+  estimatedCost?: number;
 }
 
 const MISSION_TEMPLATES = [
@@ -104,7 +106,7 @@ export function ChatPanel() {
   useEffect(() => {
     const fetchHistory = async () => {
       try {
-        const res = await fetch('/fleet/mission/history');
+        const res = await fleetFetch('/fleet/mission/history');
         if (!res.ok) return;
         const ct = res.headers.get('content-type') ?? '';
         if (!ct.includes('application/json')) return;
@@ -245,7 +247,16 @@ export function ChatPanel() {
             {history.slice(0, 5).map((h) => (
               <button
                 key={h.id}
-                onClick={() => handleSend(h.mission)}
+                onClick={async () => {
+                  try {
+                    const res = await fleetFetch(`/fleet/mission/history/${h.id}`);
+                    if (!res.ok) return;
+                    const data = await res.json();
+                    useMissionStore.getState().loadFromHistory(data);
+                  } catch (e) {
+                    console.warn('[ChatPanel] Failed to load mission history:', e);
+                  }
+                }}
                 className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-background transition-colors duration-150 group flex items-center justify-between"
               >
                 <span className="text-sm text-foreground group-hover:text-foreground truncate flex-1 mr-2">

@@ -13,13 +13,14 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
-import { RotateCcw } from 'lucide-react';
+import { RotateCcw, StopCircle } from 'lucide-react';
 import { MissionNode } from './MissionNode';
 import { OutputPanel } from './OutputPanel';
 import { NodeOutputPanel } from './NodeOutputPanel';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useMissionStore, type PipelineStep, type PipelineStatus } from '../../stores/missionStore';
+import { fleetFetch } from '../../lib/fleetFetch';
 
 const nodeTypes = { missionNode: MissionNode };
 
@@ -42,6 +43,7 @@ function getEdgeStrokeColor(sourceStatus?: string, targetStatus?: string): strin
   if (sourceStatus === 'deploying' || targetStatus === 'deploying') return '#f59e0b';
   if (sourceStatus === 'complete') return '#22c55e';
   if (sourceStatus === 'error' || targetStatus === 'error') return '#ef4444';
+  if (sourceStatus === 'skipped' || targetStatus === 'skipped') return '#D1CBC3';
   return '#D1CBC3';
 }
 
@@ -52,13 +54,14 @@ function getEdgeWidth(sourceStatus?: string, targetStatus?: string): number {
 }
 
 // -- StatusBar ---
-function StatusBar({ status, startedAt, completedAt, steps, onNewMission, hasManualMoves, onResetLayout }: {
+function StatusBar({ status, startedAt, completedAt, steps, onNewMission, hasManualMoves, onResetLayout, isHistorical }: {
   status: PipelineStatus;
   startedAt: number | null;
   completedAt: number | null;
   steps: PipelineStep[];
   onNewMission: () => void;
   hasManualMoves?: boolean;
+  isHistorical?: boolean;
   onResetLayout?: () => void;
 }) {
   const [elapsed, setElapsed] = useState(0);
@@ -135,6 +138,13 @@ function StatusBar({ status, startedAt, completedAt, steps, onNewMission, hasMan
           {statusLabel}
         </Badge>
 
+        {/* Historical badge */}
+        {isHistorical && (
+          <Badge variant="outline" className="whitespace-nowrap shrink-0 text-muted-foreground">
+            Past mission
+          </Badge>
+        )}
+
         {/* Timer */}
         <span className="text-muted-foreground cost-counter whitespace-nowrap shrink-0">{timeStr}</span>
 
@@ -167,7 +177,7 @@ function StatusBar({ status, startedAt, completedAt, steps, onNewMission, hasMan
         {status !== 'planning' && (
           <Button variant="outline" size="sm" className="hover:shadow-xs transition-all duration-150" onClick={async () => {
               try {
-                const res = await fetch('/fleet/mission/export');
+                const res = await fleetFetch('/fleet/mission/export');
                 if (!res.ok) return;
                 const data = await res.json();
                 const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -182,6 +192,20 @@ function StatusBar({ status, startedAt, completedAt, steps, onNewMission, hasMan
               }
             }}>
             Export
+          </Button>
+        )}
+        {!isHistorical && status !== 'complete' && status !== 'error' && (
+          <Button variant="outline" size="sm"
+            className="text-red-600 border-red-200 hover:bg-red-50 hover:shadow-xs active:scale-[0.98] transition-all duration-150"
+            onClick={async () => {
+              try {
+                await fleetFetch('/fleet/mission/abort', { method: 'POST' });
+              } catch (e) {
+                console.warn('[MissionCanvas] Abort failed:', e);
+              }
+            }}>
+            <StopCircle className="w-3 h-3" />
+            Abort
           </Button>
         )}
         {(status === 'complete' || status === 'error') && (
@@ -251,7 +275,7 @@ const BASE_X = 0;
 const CENTER_Y = 0;
 
 function MissionCanvasInner() {
-  const { steps, status, mission, finalOutput, startedAt, completedAt, pipelineId } = useMissionStore();
+  const { steps, status, mission, finalOutput, startedAt, completedAt, pipelineId, isHistorical, warnings } = useMissionStore();
   const [showOutput, setShowOutput] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [hasManualMoves, setHasManualMoves] = useState(false);
@@ -261,7 +285,7 @@ function MissionCanvasInner() {
 
   const handleNewMission = async () => {
     useMissionStore.getState().reset();
-    try { await fetch('/fleet/mission/reset', { method: 'POST' }); } catch (e) { console.warn('[MissionCanvas] Reset failed:', e); }
+    try { await fleetFetch('/fleet/mission/reset', { method: 'POST' }); } catch (e) { console.warn('[MissionCanvas] Reset failed:', e); }
   };
 
   // Auto-show output panel when mission completes
@@ -341,6 +365,8 @@ function MissionCanvasInner() {
           isSelected: step.id === selectedNodeId,
           hasOutput: !!(step.output || step.error),
           queuedSince: step.queuedSince,
+          outputType: step.outputType,
+          outputUrls: step.outputUrls,
         },
       });
 
@@ -488,7 +514,18 @@ function MissionCanvasInner() {
           onNewMission={handleNewMission}
           hasManualMoves={hasManualMoves}
           onResetLayout={handleResetLayout}
+          isHistorical={isHistorical}
         />
+        {warnings.length > 0 && (
+          <div className="bg-yellow-50 border-b border-yellow-200 px-4 py-2 flex flex-col gap-1">
+            {warnings.map((w, i) => (
+              <div key={i} className="flex items-center gap-2 text-yellow-700 text-xs">
+                <span>{'\u26A0\uFE0F'}</span>
+                <span>{w.step ? <><strong>{w.step}:</strong> {w.message}</> : w.message}</span>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="flex-1 relative">
           <ReactFlow
             nodes={nodes}
@@ -532,6 +569,7 @@ function MissionCanvasInner() {
               onClose={() => setShowOutput(false)}
               onNewMission={handleNewMission}
               steps={steps}
+              warnings={warnings}
               startedAt={startedAt}
               completedAt={completedAt}
             />

@@ -99,4 +99,28 @@ export const AGENT_TEMPLATES: Record<string, {
     defaultPrompt: 'You are a data analyst agent. Analyze datasets, generate insights, create summaries, and identify trends. Present findings clearly with supporting evidence.',
     market: 'nvidia-3090',
   },
+  'scene-writer': {
+    name: 'Scene Writer',
+    plugins: ['plugin-bootstrap', 'plugin-openai'],
+    defaultPrompt: 'You break content into individual visual scenes with detailed image descriptions. Output structured JSON.',
+    market: 'cpu-only',
+  },
+  'image-generator': {
+    name: 'Image Generator',
+    plugins: [],
+    defaultPrompt: 'Generate an image based on the description provided.',
+    market: 'nvidia-3090',
+  },
+  'video-generator': {
+    name: 'Video Generator',
+    plugins: [],
+    defaultPrompt: 'Generate a video based on the description provided.',
+    market: 'nvidia-4090',
+  },
+  'narrator': {
+    name: 'Narrator',
+    plugins: [],
+    defaultPrompt: 'Convert the provided text into narrated speech audio.',
+    market: 'nvidia-3090',
+  },
 };

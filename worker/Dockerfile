@@ -1,7 +1,7 @@
 FROM node:23-slim
 
 RUN apt-get update && apt-get install -y \
-    python3 make g++ git patch \
+    python3 make g++ git patch ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 ENV ELIZAOS_TELEMETRY_DISABLED=true

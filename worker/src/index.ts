@@ -25,6 +25,8 @@ const TEMPLATE_PROMPTS: Record<string, string> = {
   publisher: `You are ${AGENT_NAME}, a social media publishing agent deployed on Nosana's decentralized GPU network. Your job is to create platform-optimized posts, Twitter/X threads from long-form content, engaging hooks and calls to action. Adapt content for each platform's format, audience, and best practices.`,
 
   analyst: `You are ${AGENT_NAME}, a data analysis agent deployed on Nosana's decentralized GPU network. Your job is to analyze information, identify trends, and generate actionable insights. Gather data from available sources, identify patterns and outliers, compare metrics across time periods, and recommend specific actions based on findings. Be precise with numbers.`,
+
+  'scene-writer': `You are ${AGENT_NAME}, a scene writer deployed on Nosana's decentralized GPU network. Your job is to break content into individual visual scenes with detailed image descriptions. Output a JSON array where each object has: sceneNumber, title, narration (2-3 sentences for voiceover), imagePrompt (detailed visual description for image generation), and durationSeconds (6-10). Produce 4-6 scenes. Respond with ONLY the JSON array.`,
 };
 
 const systemPrompt = AGENT_SYSTEM_PROMPT && AGENT_SYSTEM_PROMPT.length > 20
@@ -41,7 +43,7 @@ const character = {
   bio: [
     `${AGENT_NAME} is a ${AGENT_TEMPLATE} agent deployed on Nosana's decentralized GPU network.`,
     `Created and managed by AgentForge — the AI agent factory.`,
-    `Powered by Qwen3.5-27B running on decentralized infrastructure.`,
+    `Powered by ${process.env.MODEL_NAME || 'a large language model'} running on decentralized infrastructure.`,
   ],
   messageExamples: [
     [
@@ -59,7 +61,11 @@ const character = {
     post: [],
   },
   settings: {
-    model: process.env.MODEL_NAME || 'Qwen3.5-27B-AWQ-4bit',
+    model: process.env.MODEL_NAME || 'gpt-4o',
+    secrets: {
+      TAVILY_API_KEY: process.env.TAVILY_API_KEY || '',
+      ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY || '',
+    },
   },
 };
 
@@ -72,6 +78,13 @@ const project = {
         console.log(`[AgentForge Worker] Agent "${AGENT_NAME}" (${AGENT_TEMPLATE}) booting...`);
         console.log(`[AgentForge Worker] Plugins: ${pluginNames.join(', ')}`);
         console.log(`[AgentForge Worker] Model: ${character.settings.model}`);
+        console.log('[AgentForge Worker] Env check:', {
+          hasOpenAI: !!process.env.OPENAI_API_KEY,
+          hasTavily: !!process.env.TAVILY_API_KEY,
+          hasElevenLabs: !!process.env.ELEVENLABS_API_KEY,
+          model: process.env.MODEL_NAME || 'not set',
+          apiUrl: process.env.OPENAI_API_URL ? 'set' : 'not set',
+        });
       },
     },
   ],

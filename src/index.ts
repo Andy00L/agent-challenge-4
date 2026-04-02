@@ -19,12 +19,24 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const characterPath = resolve(__dirname, '..', 'characters', 'forge-master.character.json');
 const character = JSON.parse(readFileSync(characterPath, 'utf-8'));
 
+// Conditionally load Telegram plugin if TELEGRAM_BOT_TOKEN is set
+let telegramPlugin: any = null;
+if (process.env.TELEGRAM_BOT_TOKEN) {
+  try {
+    const mod = await (Function('return import("@elizaos/plugin-telegram")')() as Promise<any>);
+    telegramPlugin = mod.telegramPlugin || mod.default;
+    console.log('[AgentForge] Telegram plugin loaded');
+  } catch (e) {
+    console.warn('[AgentForge] Telegram plugin not available — install @elizaos/plugin-telegram to enable');
+  }
+}
+
 // Export as Project (not Plugin) so ElizaOS CLI loads the correct character
 const project = {
   agents: [
     {
       character,
-      plugins: [nosanaPlugin],
+      plugins: [nosanaPlugin, ...(telegramPlugin ? [telegramPlugin] : [])],
       init: async () => {},
     },
   ],

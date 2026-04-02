@@ -7,7 +7,7 @@ import { scaleReplicasAction } from './actions/scaleReplicas.js';
 import { stopDeploymentAction } from './actions/stopDeployment.js';
 import { fleetStatusProvider } from './providers/fleetStatusProvider.js';
 import { getNosanaManager } from './services/nosanaManager.js';
-import { getPipelineState, resetPipelineState, getMissionHistory, MissionOrchestrator } from './services/missionOrchestrator.js';
+import { getPipelineState, resetPipelineState, getMissionHistory, getMissionHistoryById, MissionOrchestrator, getMedia, abortMission } from './services/missionOrchestrator.js';
 import { missionQualityEvaluator } from './evaluators/missionQualityEvaluator.js';
 import { actionEventHandlers, getActionMetrics } from './events/actionMetrics.js';
 import { nosanaPluginTests } from './tests/pluginTests.js';
@@ -83,10 +83,49 @@ export const nosanaPlugin: Plugin = {
     const { default: express } = await import('express');
     const { default: cors } = await import('cors');
     const app = express();
+    const corsOrigin = process.env.CORS_ORIGIN
+      ? process.env.CORS_ORIGIN.split(',').map(o => o.trim())
+      : 'http://localhost:5173';
     app.use(cors({
-      origin: process.env.CORS_ORIGIN || true, // restrict in production via CORS_ORIGIN env var
+      origin: corsOrigin,
+      credentials: true,
+      methods: ['GET', 'POST'],
+      allowedHeaders: ['Content-Type', 'x-api-token'],
     }));
     app.use(express.json({ limit: '1mb' }));
+
+    // Fleet API authentication — protects cost-bearing endpoints
+    const { randomUUID } = await import('crypto');
+    const FLEET_API_TOKEN = process.env.FLEET_API_TOKEN || randomUUID();
+    if (!process.env.FLEET_API_TOKEN) {
+      // Log only the last 8 chars to confirm it's set, without exposing the full token
+      console.log(`[AgentForge:FleetAPI] Generated API token (ends ...${FLEET_API_TOKEN.slice(-8)}). Set FLEET_API_TOKEN in .env to use a fixed token.`);
+    }
+    // Token endpoint — localhost only, lets the frontend discover the token
+    app.get('/fleet/auth/token', (req: any, res: any) => {
+      // Check the raw socket address — req.ip can be spoofed via X-Forwarded-For
+      const rawIp = req.socket?.remoteAddress || '';
+      const isLocal = rawIp === '127.0.0.1' || rawIp === '::1' || rawIp === '::ffff:127.0.0.1';
+      if (!isLocal) {
+        res.status(403).json({ error: 'Token endpoint only available from localhost' });
+        return;
+      }
+      res.json({ token: FLEET_API_TOKEN });
+    });
+    // Auth middleware — skips /fleet/auth/token and /fleet/media/ (served by unguessable ID,
+    // and browser <audio>/<img>/<video> elements can't add custom headers)
+    app.use('/fleet', (req: any, res: any, next: any) => {
+      if (req.path === '/auth/token') return next();
+      if (req.path.startsWith('/media/')) return next();
+      // Only accept token from headers — never from query string (leaks in logs/referer)
+      const token = req.headers['x-api-token'];
+      if (token !== FLEET_API_TOKEN) {
+        res.status(401).json({ error: 'Unauthorized', message: 'Provide a valid x-api-token header.' });
+        return;
+      }
+      next();
+    });
+
     app.get('/fleet', async (_req: any, res: any) => {
       const manager = getNosanaManager();
       const status = await manager.getFleetStatus();
@@ -109,8 +148,22 @@ export const nosanaPlugin: Plugin = {
       resetPipelineState();
       res.json({ success: true });
     });
+    app.post('/fleet/mission/abort', async (_req: any, res: any) => {
+      const state = getPipelineState();
+      if (state.status === 'idle' || state.status === 'complete' || state.status === 'error') {
+        res.status(409).json({ error: 'No active mission to abort' });
+        return;
+      }
+      abortMission();
+      res.json({ success: true, message: 'Abort signal sent. Mission will stop after current step.' });
+    });
     app.get('/fleet/mission/history', (_req: any, res: any) => {
       res.json(getMissionHistory());
+    });
+    app.get('/fleet/mission/history/:id', (req: any, res: any) => {
+      const entry = getMissionHistoryById(req.params.id);
+      if (!entry) { res.status(404).json({ error: 'Mission not found in history' }); return; }
+      res.json(entry);
     });
     app.get('/fleet/mission/export', (_req: any, res: any) => {
       const state = getPipelineState();
@@ -175,6 +228,14 @@ export const nosanaPlugin: Plugin = {
           { method: 'GET', path: '/fleet/credits', description: 'Get credit balance' },
         ],
       });
+    });
+    // Media endpoint — serves images/videos/audio stored in memory by the orchestrator
+    app.get('/fleet/media/:id', (req: any, res: any) => {
+      const media = getMedia(req.params.id);
+      if (!media) { res.status(404).json({ error: 'Media not found' }); return; }
+      res.setHeader('Content-Type', media.contentType);
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      res.send(media.data);
     });
     app.get('/fleet/:id/activity', async (req: any, res: any) => {
       const manager = getNosanaManager();

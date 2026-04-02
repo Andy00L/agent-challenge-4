@@ -7,11 +7,20 @@ function sanitizeHtml(text: string): string {
     .replace(/'/g, '&#39;');
 }
 
-// Strip any HTML tags that might have been injected after markdown rendering.
-// This catches edge cases where markdown regex produces nested or malformed tags.
+/**
+ * Strip dangerous HTML patterns that could survive markdown rendering.
+ * Defense-in-depth: the input is already entity-escaped, but these catch
+ * edge cases from regex-based markdown transforms.
+ */
 function stripDangerousPatterns(html: string): string {
-  // Remove on* event handlers that could survive sanitization
-  return html.replace(/\bon\w+\s*=\s*["'][^"']*["']/gi, '');
+  return html
+    // Remove on* event handlers (quoted, unquoted, backtick-quoted)
+    .replace(/\bon\w+\s*=\s*["'`][^"'`]*["'`]/gi, '')
+    .replace(/\bon\w+\s*=\s*[^\s>]*/gi, '')
+    // Remove javascript: protocol (in case a link regex is ever added)
+    .replace(/javascript\s*:/gi, '')
+    // Remove data: URIs that could execute (text/html, etc.)
+    .replace(/data\s*:\s*text\/html/gi, '');
 }
 
 export function renderMarkdown(text: string): string {

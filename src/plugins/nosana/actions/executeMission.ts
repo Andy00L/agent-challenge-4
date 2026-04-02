@@ -1,4 +1,5 @@
 import type { Action } from '@elizaos/core';
+import { randomUUID } from 'crypto';
 import { MissionOrchestrator } from '../services/missionOrchestrator.js';
 
 export const executeMissionAction: Action = {
@@ -38,28 +39,28 @@ export const executeMissionAction: Action = {
     const sendUpdate = async (text: string) => {
       if (!callback) return;
       try {
-        await callback({ text, action: 'EXECUTE_MISSION' });
-      } catch {
-        // Ignore DB unique constraint errors from rapid sequential callbacks
+        // Each callback must have a unique ID to prevent DB duplicate key errors in ElizaOS
+        await callback({ id: randomUUID(), text, action: 'EXECUTE_MISSION' });
+      } catch (err: any) {
+        // Still ignore errors — the orchestrator must not crash due to chat delivery failure
+        console.warn(`[AgentForge:Mission] Callback failed: ${err.message?.slice(0, 100)}`);
       }
     };
 
     try {
       const result = await orchestrator.execute(mission, sendUpdate);
 
+      const completedCount = result.steps.filter(s => s.status === 'complete').length;
       const summary = [
-        '**Mission Complete!**',
+        `\u{2705} **Mission Complete!** ${completedCount}/${result.steps.length} agents succeeded in ${Math.round(result.totalTime / 1000)}s.`,
         '',
         `Pipeline: ${result.steps.map(s => `${s.step.name} (${s.status})`).join(' \u2192 ')}`,
-        `Time: ${Math.round(result.totalTime / 1000)}s | Agents stopped to save credits`,
         '',
-        '---',
-        '',
-        result.finalOutput,
+        'View the full output in the **Mission Canvas** panel \u2192',
       ].join('\n');
 
       await sendUpdate(summary);
-      return { text: summary, success: true, data: { result } };
+      return { text: result.finalOutput, success: true, data: { result } };
     } catch (error: any) {
       const errMsg = `Mission failed: ${error.message || error}`;
       await sendUpdate(errMsg);

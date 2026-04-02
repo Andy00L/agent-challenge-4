@@ -4,14 +4,16 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
-import type { PipelineStep } from '../../stores/missionStore';
-import { renderMarkdown } from '../../lib/markdown';
+import type { PipelineStep, MissionWarning } from '../../stores/missionStore';
+import { detectMediaInOutput } from '../../lib/mediaDetector';
+import { TruncatedMarkdown } from './TruncatedMarkdown';
 
 interface OutputPanelProps {
   output: string;
   onClose: () => void;
   onNewMission: () => void;
   steps: PipelineStep[];
+  warnings?: MissionWarning[];
   startedAt: number | null;
   completedAt: number | null;
 }
@@ -23,7 +25,7 @@ function formatElapsed(ms: number): string {
   return mins > 0 ? `${mins}m ${String(s).padStart(2, '0')}s` : `${s}s`;
 }
 
-export function OutputPanel({ output, onClose, onNewMission, steps, startedAt, completedAt }: OutputPanelProps) {
+export function OutputPanel({ output, onClose, onNewMission, steps, warnings, startedAt, completedAt }: OutputPanelProps) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
@@ -85,12 +87,45 @@ export function OutputPanel({ output, onClose, onNewMission, steps, startedAt, c
       </div>
       <Separator />
 
-      {/* Body -- Markdown rendered */}
+      {/* Warnings */}
+      {warnings && warnings.length > 0 && (
+        <div className="bg-yellow-50 border-b border-yellow-200 px-6 py-3">
+          {warnings.map((w, i) => (
+            <div key={i} className="flex items-center gap-2 text-yellow-700 text-xs">
+              <span>{'\u26A0\uFE0F'}</span>
+              <span>{w.step ? <><strong>{w.step}:</strong> {w.message}</> : w.message}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Body -- Markdown rendered + media */}
       <div className="flex-1 overflow-y-auto px-6 py-5">
-        <div
-          className="text-sm text-foreground/80 leading-relaxed"
-          dangerouslySetInnerHTML={{ __html: renderMarkdown(output) }}
-        />
+        {(() => {
+          const media = detectMediaInOutput(output);
+          // Also collect audio from step outputUrls (narrator audio won't appear in the text)
+          const stepAudioUrls = steps
+            .filter(s => s.outputType === 'audio' && s.outputUrls?.length)
+            .flatMap(s => s.outputUrls!);
+          const allAudioUrls = [...new Set([...media.audioUrls, ...stepAudioUrls])];
+          return (
+            <>
+              {media.videoUrls.map((url, i) => (
+                <video key={`v-${i}`} src={url} controls className="w-full rounded-lg border border-[var(--border)] my-3"
+                  onError={(e) => { (e.target as HTMLVideoElement).style.display = 'none'; }} />
+              ))}
+              {media.imageUrls.map((url, i) => (
+                <img key={`i-${i}`} src={url} alt={`Generated ${i + 1}`} className="w-full rounded-lg border border-[var(--border)] my-3"
+                  onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+              ))}
+              {allAudioUrls.map((url, i) => (
+                <audio key={`a-${i}`} src={url} controls className="w-full my-3"
+                  onError={(e) => { (e.target as HTMLAudioElement).style.display = 'none'; }} />
+              ))}
+            </>
+          );
+        })()}
+        <TruncatedMarkdown text={output} />
       </div>
 
       {/* Pipeline summary */}

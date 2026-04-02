@@ -1,4 +1,5 @@
 import { useFleetStore } from '../stores/fleetStore';
+import { fleetFetch } from './fleetFetch';
 
 const POLL_INTERVAL = 5000;
 
@@ -12,7 +13,7 @@ export async function pollFleetOnce(): Promise<void> {
   if (!_agentId) return;
 
   try {
-    const res = await fetch(`/fleet?agentId=${_agentId}`);
+    const res = await fleetFetch(`/fleet?agentId=${_agentId}`);
     if (!res.ok) return;
 
     const contentType = res.headers.get('content-type') ?? '';
@@ -28,7 +29,7 @@ export async function pollFleetOnce(): Promise<void> {
 
 async function pollCredits(): Promise<void> {
   try {
-    const res = await fetch('/fleet/credits');
+    const res = await fleetFetch('/fleet/credits');
     if (!res.ok) return;
     const contentType = res.headers.get('content-type') ?? '';
     if (!contentType.includes('application/json')) return;
@@ -41,7 +42,7 @@ async function pollCredits(): Promise<void> {
 
 async function pollMarkets(): Promise<void> {
   try {
-    const res = await fetch('/fleet/markets');
+    const res = await fleetFetch('/fleet/markets');
     if (!res.ok) return;
     const contentType = res.headers.get('content-type') ?? '';
     if (!contentType.includes('application/json')) return;

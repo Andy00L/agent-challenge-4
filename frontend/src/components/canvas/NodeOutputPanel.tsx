@@ -4,7 +4,8 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import type { PipelineStep } from '../../stores/missionStore';
-import { renderMarkdown } from '../../lib/markdown';
+import { detectMediaInOutput } from '../../lib/mediaDetector';
+import { TruncatedMarkdown } from './TruncatedMarkdown';
 
 const TEMPLATE_ICONS: Record<string, string> = {
   researcher: '\u{1F50D}',
@@ -12,6 +13,10 @@ const TEMPLATE_ICONS: Record<string, string> = {
   analyst: '\u{1F4CA}',
   monitor: '\u{1F4E1}',
   publisher: '\u{1F4E2}',
+  'scene-writer': '\u{1F3AC}',
+  'image-generator': '\u{1F3A8}',
+  'video-generator': '\u{1F3AC}',
+  'narrator': '\u{1F50A}',
 };
 
 interface Props {
@@ -54,7 +59,7 @@ export function NodeOutputPanel({ step, onClose }: Props) {
           <div>
             <div className="text-sm font-bold text-foreground">{step.name}</div>
             <Badge variant={step.status === 'complete' ? 'default' : step.status === 'error' ? 'destructive' : 'secondary'} className="mt-0.5">
-              {step.status}
+              {step.status === 'skipped' ? 'Skipped' : step.status}
             </Badge>
           </div>
         </div>
@@ -87,10 +92,27 @@ export function NodeOutputPanel({ step, onClose }: Props) {
           </div>
         )}
         {step.output ? (
-          <div
-            className="text-sm text-foreground/80 leading-relaxed"
-            dangerouslySetInnerHTML={{ __html: renderMarkdown(step.output) }}
-          />
+          <>
+            {/* Render media if present */}
+            {step.outputUrls?.map((url, i) => {
+              if (step.outputType === 'image') return <img key={i} src={url} alt={`Generated ${i + 1}`} className="w-full rounded-lg border border-[var(--border)] my-3" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />;
+              if (step.outputType === 'video') return <video key={i} src={url} controls className="w-full rounded-lg border border-[var(--border)] my-3" onError={(e) => { (e.target as HTMLVideoElement).style.display = 'none'; }} />;
+              if (step.outputType === 'audio') return <audio key={i} src={url} controls className="w-full my-3" onError={(e) => { (e.target as HTMLAudioElement).style.display = 'none'; }} />;
+              return null;
+            })}
+            {/* Also detect media URLs in text output */}
+            {(!step.outputType || step.outputType === 'text') && (() => {
+              const media = detectMediaInOutput(step.output);
+              return (
+                <>
+                  {media.imageUrls.map((url, i) => <img key={`det-${i}`} src={url} alt={`Generated ${i + 1}`} className="w-full rounded-lg border border-[var(--border)] my-3" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />)}
+                  {media.videoUrls.map((url, i) => <video key={`det-v-${i}`} src={url} controls className="w-full rounded-lg border border-[var(--border)] my-3" onError={(e) => { (e.target as HTMLVideoElement).style.display = 'none'; }} />)}
+                  {media.audioUrls.map((url, i) => <audio key={`det-a-${i}`} src={url} controls className="w-full my-3" onError={(e) => { (e.target as HTMLAudioElement).style.display = 'none'; }} />)}
+                </>
+              );
+            })()}
+            <TruncatedMarkdown text={step.output} />
+          </>
         ) : !step.error ? (
           <p className="text-sm text-muted-foreground">No output yet.</p>
         ) : null}

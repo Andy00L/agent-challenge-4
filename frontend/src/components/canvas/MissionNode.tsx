@@ -20,6 +20,8 @@ interface MissionNodeData {
   isSelected?: boolean;
   hasOutput?: boolean;
   queuedSince?: number;
+  outputType?: 'text' | 'image' | 'video' | 'audio';
+  outputUrls?: string[];
 }
 
 const TEMPLATE_ICONS: Record<string, string> = {
@@ -28,6 +30,10 @@ const TEMPLATE_ICONS: Record<string, string> = {
   analyst: '\u{1F4CA}',
   monitor: '\u{1F4E1}',
   publisher: '\u{1F4E2}',
+  'scene-writer': '\u{1F3AC}',
+  'image-generator': '\u{1F3A8}',
+  'video-generator': '\u{1F3AC}',
+  'narrator': '\u{1F50A}',
   custom: '\u{2699}\u{FE0F}',
   mission: '\u{1F3AF}',
   output: '\u{1F4E6}',
@@ -42,6 +48,7 @@ const STATUS_STYLES: Record<string, { accent: string; bg: string; anim: string }
   processing: { accent: 'border-l-[3px] border-l-blue-500',       bg: 'bg-white',    anim: 'animate-node-glow' },
   complete:   { accent: 'border-l-[3px] border-l-green-500',      bg: 'bg-white',    anim: 'node-complete-pop' },
   error:      { accent: 'border-l-[3px] border-l-red-500',        bg: 'bg-white',    anim: '' },
+  skipped:    { accent: 'border-l-[3px] border-l-gray-300',       bg: 'bg-gray-50/50', anim: 'opacity-60' },
   stopped:    { accent: 'border-l-[3px] border-l-gray-300',       bg: 'bg-white',    anim: 'opacity-60' },
   mission:    { accent: 'border-l-[3px] border-l-foreground',     bg: 'bg-white',    anim: '' },
   output:     { accent: 'border-l-[3px] border-l-foreground',     bg: 'bg-white',    anim: '' },
@@ -56,6 +63,7 @@ const DOT_COLORS: Record<string, string> = {
   processing: 'bg-blue-500 animate-pulse',
   complete:   'bg-green-500',
   error:      'bg-red-500',
+  skipped:    'bg-gray-300',
   stopped:    'bg-gray-400',
   mission:    'bg-foreground',
   output:     'bg-foreground',
@@ -69,6 +77,7 @@ const STATUS_LABELS: Record<string, string> = {
   processing: 'Processing...',
   complete: 'Complete',
   error: 'Error',
+  skipped: 'Skipped',
   stopped: 'Stopped',
   mission: 'Mission',
   output: 'Output',
@@ -132,16 +141,37 @@ function MissionNodeComponent({ data }: NodeProps) {
       )}
 
       {/* Output preview */}
-      {st === 'complete' && d.outputPreview && (
+      {st === 'complete' && d.outputType === 'image' && d.outputUrls?.[0] && (
         <div className="mt-2 pt-2 border-t">
-          <p className="text-xs text-muted-foreground line-clamp-3 italic">{d.outputPreview}</p>
+          <img src={d.outputUrls[0]} alt="Generated" className="w-full h-20 object-cover rounded border border-[var(--border)]"
+            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+        </div>
+      )}
+      {st === 'complete' && d.outputType === 'video' && (
+        <div className="mt-2 pt-2 border-t flex items-center gap-1 text-[10px] text-blue-600">
+          <span>{'\uD83C\uDFAC'}</span> Video generated
+        </div>
+      )}
+      {st === 'complete' && d.outputType === 'audio' && (
+        <div className="mt-2 pt-2 border-t flex items-center gap-1 text-[10px] text-blue-600">
+          <span>{'\uD83D\uDD0A'}</span> Audio generated
+        </div>
+      )}
+      {st === 'complete' && (!d.outputType || d.outputType === 'text') && d.outputPreview && (
+        <div className="mt-2 pt-2 border-t">
+          <p className="text-xs text-muted-foreground line-clamp-3 italic whitespace-pre-line">{d.outputPreview}</p>
+        </div>
+      )}
+      {st === 'skipped' && (
+        <div className="mt-2 pt-2 border-t">
+          <p className="text-xs text-gray-400 italic">Not configured — skipped</p>
         </div>
       )}
 
       {/* Final output (for output node) */}
       {st === 'output' && d.finalOutput && (
         <div className="mt-1">
-          <p className="text-xs text-muted-foreground line-clamp-4">{d.finalOutput}</p>
+          <p className="text-xs text-muted-foreground line-clamp-4 whitespace-pre-line">{d.finalOutput}</p>
         </div>
       )}
 

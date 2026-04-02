@@ -1,4 +1,20 @@
 import { NosanaDeploymentRecord, FleetStatus, GPU_MARKETS, type GpuMarket } from '../types.js';
+import type { MediaServiceConfig } from './mediaServiceDefinitions.js';
+
+// Known VRAM per GPU model — used for VRAM-based market filtering
+const GPU_VRAM_GB: Record<string, number> = {
+  '3060': 12, '3070': 8, '3080': 10, '3090': 24,
+  '4060': 8, '4070': 12, '4080': 16, '4090': 24,
+  'a100': 80, 'a10g': 24, 'a10': 24, 'l4': 24, 'l40': 48, 'h100': 80,
+};
+
+function estimateGpuVram(gpuField: string): number {
+  const lower = gpuField.toLowerCase();
+  for (const [model, vram] of Object.entries(GPU_VRAM_GB)) {
+    if (lower.includes(model)) return vram;
+  }
+  return 0;
+}
 
 let createNosanaClient: any;
 try {
@@ -279,6 +295,9 @@ export class NosanaManager {
   }
 
   async scaleDeployment(deploymentId: string, replicas: number): Promise<NosanaDeploymentRecord> {
+    if (!Number.isInteger(replicas) || replicas < 1 || replicas > 10) {
+      throw new Error(`Invalid replica count: ${replicas}. Must be an integer between 1 and 10.`);
+    }
     const record = this.deployments.get(deploymentId);
     if (!record) throw new Error(`Deployment ${deploymentId} not found in fleet`);
 
@@ -373,6 +392,13 @@ export class NosanaManager {
 
   async getFleetStatus(): Promise<FleetStatus> {
     await this.refreshAllActiveDeployments();
+    // Evict stopped/error deployments older than 10 minutes to prevent unbounded Map growth
+    const evictThreshold = Date.now() - 600_000;
+    for (const [id, dep] of this.deployments) {
+      if ((dep.status === 'stopped' || dep.status === 'error' || dep.status === 'archived') && dep.startedAt.getTime() < evictThreshold) {
+        this.deployments.delete(id);
+      }
+    }
     const all = Array.from(this.deployments.values());
     const active = all.filter(d => d.status === 'running' || d.status === 'starting');
     return {
@@ -517,6 +543,326 @@ export class NosanaManager {
       }
     }
     return Math.round(total * 1000) / 1000;
+  }
+
+  // ── Dynamic media service deployment ──────────────────
+
+  private mediaServiceDeployments = new Map<string, {
+    deploymentId: string;
+    url: string;
+    serviceType: string;
+    status: 'deploying' | 'running' | 'stopped';
+  }>();
+
+  /**
+   * Get PREMIUM GPU markets with at least `minVramGB` of VRAM.
+   * Returns markets sorted by price (cheapest first), excluding already-tried addresses.
+   */
+  async getMarketsWithMinVram(minVramGB: number, excludeAddresses: string[] = []): Promise<GpuMarket[]> {
+    const markets = await this.getMarkets();
+    const excluded = new Set(excludeAddresses);
+    return markets.filter(m =>
+      m.pricePerHour > 0 &&
+      m.type === 'PREMIUM' &&
+      !excluded.has(m.address) &&
+      estimateGpuVram(m.gpu || m.name) >= minVramGB
+    );
+  }
+
+  /**
+   * Deploy a media service (ComfyUI, Wan 2.2, TTS, A1111) on Nosana GPU.
+   * Reuses an existing running deployment if available.
+   *
+   * Market selection: tries `preferredMarket` (by name) first, then falls back
+   * to VRAM-eligible markets if QUEUED. Up to 3 markets are tried before giving up.
+   * Once a deployment reaches RUNNING/starting, `waitForMediaServiceReady` takes over.
+   *
+   * @returns The service base URL (e.g. https://xxx.node.k8s.prd.nos.ci)
+   */
+  async deployMediaService(serviceKey: string): Promise<string> {
+    // Reuse existing deployment if still running
+    const existing = this.mediaServiceDeployments.get(serviceKey);
+    if (existing && existing.status === 'running') {
+      console.log(`[AgentForge:Manager] Reusing existing media service: ${serviceKey} at ${existing.url}`);
+      return existing.url;
+    }
+
+    const { MEDIA_SERVICES } = await import('./mediaServiceDefinitions.js');
+    const config = MEDIA_SERVICES[serviceKey];
+    if (!config) throw new Error(`Unknown media service: ${serviceKey}`);
+
+    console.log(`[AgentForge:Manager] Deploying media service: ${config.name} (minVram=${config.minVramGB}GB, preferred=${config.preferredMarket})`);
+
+    if (!this.ensureClient()) {
+      throw new Error(`Cannot deploy media service "${config.name}" in mock mode. Set NOSANA_API_KEY.`);
+    }
+
+    // Build ordered market candidate list: preferred first, then VRAM-eligible by price
+    const marketCandidates: GpuMarket[] = [];
+    const preferred = await this.findMarket(config.preferredMarket);
+    if (preferred) {
+      marketCandidates.push(preferred);
+    } else {
+      console.warn(`[AgentForge:Manager] Preferred market "${config.preferredMarket}" not found, using VRAM fallback only`);
+    }
+    const vramMarkets = await this.getMarketsWithMinVram(config.minVramGB);
+    for (const m of vramMarkets) {
+      if (!marketCandidates.some(c => c.address === m.address)) {
+        marketCandidates.push(m);
+      }
+    }
+    if (marketCandidates.length === 0) {
+      throw new Error(`No GPU markets with ≥${config.minVramGB}GB VRAM available for ${config.name}`);
+    }
+
+    // Credit pre-check against cheapest candidate
+    const cheapest = marketCandidates.reduce((a, b) => a.pricePerHour < b.pricePerHour ? a : b);
+    const credits = await this.getCreditsBalance();
+    if (credits && credits.balance < cheapest.pricePerHour) {
+      throw new Error(
+        `Insufficient credits for ${config.name}. ` +
+        `Available: $${credits.balance.toFixed(2)}, need $${cheapest.pricePerHour.toFixed(3)}/hr. ` +
+        `Top up at https://deploy.nosana.com`
+      );
+    }
+
+    const safeName = `media-${serviceKey}`.replace(/[^a-z0-9-]/g, '-').slice(0, 50);
+    const triedAddresses: string[] = [];
+    const MAX_ATTEMPTS = 3;
+    const QUEUE_FALLBACK_MS = 120_000;
+
+    for (let attempt = 0; attempt < Math.min(marketCandidates.length, MAX_ATTEMPTS); attempt++) {
+      const market = marketCandidates.find(m => !triedAddresses.includes(m.address));
+      if (!market) break;
+
+      console.log(`[AgentForge:Manager] Media deploy attempt ${attempt + 1}/${MAX_ATTEMPTS}: ${config.name} → ${market.name} ($${market.pricePerHour.toFixed(3)}/hr)`);
+
+      let deploymentId: string;
+      try {
+        deploymentId = await this._createMediaDeployment(serviceKey, config, market, safeName);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[AgentForge:Manager] SDK deploy failed on ${market.name}: ${msg}`);
+        triedAddresses.push(market.address);
+        continue;
+      }
+
+      // Poll for QUEUED→RUNNING transition (market fallback handles QUEUED only)
+      const queueStart = Date.now();
+      let reachedRunning = false;
+
+      while (Date.now() - queueStart < QUEUE_FALLBACK_MS) {
+        await new Promise(r => setTimeout(r, 10_000));
+        const refreshed = await this.refreshDeploymentStatus(deploymentId);
+        if (!refreshed) break;
+
+        if (refreshed.status === 'running' || refreshed.status === 'starting') {
+          console.log(`[AgentForge:Manager] ${config.name}: ${refreshed.status} on ${market.name} — handing off to health check`);
+          reachedRunning = true;
+          break;
+        }
+
+        if (refreshed.status === 'error' || refreshed.status === 'stopped') {
+          throw new Error(`Media service ${config.name} failed on ${market.name} (status: ${refreshed.status})`);
+        }
+
+        if (refreshed.status === 'queued') {
+          const elapsed = Math.floor((Date.now() - queueStart) / 1000);
+          console.log(`[AgentForge:Manager] ${config.name}: QUEUED on ${market.name} ($${market.pricePerHour.toFixed(3)}/hr) — ${elapsed}s elapsed`);
+        }
+      }
+
+      if (reachedRunning) {
+        // Health check takes over from here (waitForMediaServiceReady remains separate)
+        try {
+          return await this.waitForMediaServiceReady(deploymentId, serviceKey, config);
+        } catch (healthErr) {
+          console.error(`[AgentForge:Manager] ${config.name}: health check failed on ${market.name}:`, healthErr);
+          throw healthErr;
+        }
+      }
+
+      // Still QUEUED after timeout — cancel and try next market
+      console.log(`[AgentForge:Manager] ${config.name}: QUEUED too long on ${market.name}, cancelling and trying next market`);
+      triedAddresses.push(market.address);
+      try { await this.stopDeployment(deploymentId); } catch (e) {
+        console.warn(`[AgentForge:Manager] Failed to stop QUEUED deployment ${deploymentId}: ${e}`);
+      }
+      this.deployments.delete(deploymentId);
+      this.mediaServiceDeployments.delete(serviceKey);
+    }
+
+    throw new Error(
+      `Failed to deploy ${config.name}: all ${triedAddresses.length} market(s) QUEUED or unavailable. ` +
+      `Tried markets with ≥${config.minVramGB}GB VRAM. No GPU nodes available — try again later.`
+    );
+  }
+
+  /**
+   * Create a media service deployment on a specific market via the Nosana SDK.
+   * Returns the deployment ID. Does NOT wait for RUNNING or health check.
+   */
+  private async _createMediaDeployment(
+    serviceKey: string,
+    config: MediaServiceConfig,
+    market: GpuMarket,
+    safeName: string,
+  ): Promise<string> {
+    const deploymentBody = {
+      name: safeName,
+      market: market.address,
+      timeout: Math.ceil(config.bootTimeoutMs / 60_000) + 30,
+      replicas: 1,
+      strategy: 'SIMPLE',
+      job_definition: config.jobDefinition,
+    };
+
+    let deployment: any;
+    if (this.client.api?.deployments?.pipe) {
+      deployment = await this.client.api.deployments.pipe(
+        deploymentBody,
+        async (dep: any) => {
+          console.log(`[AgentForge:Manager] Starting media service: ${config.name} on ${market.name}`);
+          await dep.start();
+        },
+      );
+    } else if (this.client.api?.deployments?.create) {
+      const created = await this.client.api.deployments.create(deploymentBody);
+      deployment = await this.client.api.deployments.get(created.id || created._id);
+      await deployment.start();
+    } else {
+      throw new Error('No supported deployment method found in @nosana/kit SDK');
+    }
+
+    const deploymentId = deployment.id || deployment._id || `dep-${Date.now()}`;
+    const endpointUrl = deployment.endpoints?.[0]?.url || deployment.url || undefined;
+
+    const record: NosanaDeploymentRecord = {
+      id: deploymentId,
+      name: safeName,
+      status: 'starting',
+      market: market.name,
+      marketAddress: market.address,
+      replicas: 1,
+      costPerHour: market.pricePerHour,
+      startedAt: new Date(),
+      url: endpointUrl,
+      agentTemplate: 'media-service',
+    };
+    this.deployments.set(deploymentId, record);
+
+    this.mediaServiceDeployments.set(serviceKey, {
+      deploymentId,
+      url: '',
+      serviceType: serviceKey,
+      status: 'deploying',
+    });
+
+    return deploymentId;
+  }
+
+  /**
+   * Poll until a media service deployment is running and its health endpoint responds.
+   */
+  private async waitForMediaServiceReady(
+    deploymentId: string,
+    serviceKey: string,
+    config: { name: string; healthCheckPath: string; bootTimeoutMs: number },
+  ): Promise<string> {
+    const start = Date.now();
+
+    // Phase 1: Wait for deployment to reach RUNNING status and get a URL
+    let serviceUrl = '';
+    while (Date.now() - start < config.bootTimeoutMs) {
+      await new Promise(r => setTimeout(r, 10_000));
+      try {
+        const refreshed = await this.refreshDeploymentStatus(deploymentId);
+        if (!refreshed) continue;
+
+        if (refreshed.status === 'error' || refreshed.status === 'stopped') {
+          throw new Error(`Media service ${config.name} failed (status: ${refreshed.status})`);
+        }
+
+        if (refreshed.url && refreshed.status === 'running') {
+          serviceUrl = refreshed.url.startsWith('http') ? refreshed.url : `https://${refreshed.url}`;
+          console.log(`[AgentForge:Manager] Media service running: ${config.name} at ${serviceUrl}`);
+          break;
+        }
+      } catch (err: any) {
+        if (err.message?.includes('failed (status:')) throw err;
+        // Transient refresh errors — keep polling
+      }
+    }
+
+    if (!serviceUrl) {
+      throw new Error(`Media service ${config.name} did not start within ${config.bootTimeoutMs / 1000}s`);
+    }
+
+    // Phase 2: Health check — poll until the service is actually ready to accept requests
+    const healthUrl = `${serviceUrl}${config.healthCheckPath}`;
+    const timeoutSec = config.bootTimeoutMs / 1000;
+    let healthAttempt = 0;
+    console.log(`[AgentForge:Manager] Health check starting: ${config.name} → ${healthUrl} (timeout: ${timeoutSec}s)`);
+
+    while (Date.now() - start < config.bootTimeoutMs) {
+      healthAttempt++;
+      const elapsed = Math.floor((Date.now() - start) / 1000);
+      try {
+        const res = await fetch(healthUrl, { signal: AbortSignal.timeout(5000) });
+        console.log(`[AgentForge:Manager] Health check #${healthAttempt} (${elapsed}s): ${healthUrl} → HTTP ${res.status}`);
+        if (res.ok) {
+          console.log(`[AgentForge:Manager] Media service healthy: ${config.name} (after ${elapsed}s, ${healthAttempt} attempts)`);
+          this.mediaServiceDeployments.set(serviceKey, {
+            deploymentId,
+            url: serviceUrl,
+            serviceType: serviceKey,
+            status: 'running',
+          });
+          return serviceUrl;
+        }
+      } catch (healthErr: any) {
+        const reason = healthErr?.cause?.code || healthErr?.code || healthErr?.message || 'unknown';
+        console.log(`[AgentForge:Manager] Health check #${healthAttempt} (${elapsed}s): ${healthUrl} → FAILED (${reason})`);
+      }
+      await new Promise(r => setTimeout(r, 5000));
+    }
+
+    const totalElapsed = Math.floor((Date.now() - start) / 1000);
+    throw new Error(`Media service ${config.name} running but health check at ${healthUrl} failed after ${totalElapsed}s (${healthAttempt} attempts)`);
+  }
+
+  /**
+   * Stop a media service deployment.
+   */
+  async stopMediaService(serviceKey: string): Promise<void> {
+    const service = this.mediaServiceDeployments.get(serviceKey);
+    if (!service) return;
+
+    try {
+      await this.stopDeployment(service.deploymentId);
+      console.log(`[AgentForge:Manager] Stopped media service: ${serviceKey}`);
+    } catch (err: any) {
+      console.warn(`[AgentForge:Manager] Failed to stop media service ${serviceKey}: ${err.message}`);
+    }
+    this.mediaServiceDeployments.delete(serviceKey);
+  }
+
+  /**
+   * Stop ALL deployed media services. Called at end of mission.
+   */
+  async stopAllMediaServices(): Promise<void> {
+    const keys = [...this.mediaServiceDeployments.keys()];
+    for (const key of keys) {
+      await this.stopMediaService(key);
+    }
+  }
+
+  /**
+   * Get the URL of an already-running media service, or null.
+   */
+  getMediaServiceUrl(serviceKey: string): string | null {
+    const service = this.mediaServiceDeployments.get(serviceKey);
+    return service?.status === 'running' ? service.url : null;
   }
 }
 

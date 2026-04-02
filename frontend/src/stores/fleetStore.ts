@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { fleetFetch } from '../lib/fleetFetch';
 
 export interface DeploymentInfo {
   id: string;
@@ -62,7 +63,7 @@ export const useFleetStore = create<FleetStore>((set) => ({
   setMarkets: (markets) => set({ markets }),
   fetchActivity: async (deploymentId) => {
     try {
-      const res = await fetch(`/fleet/${deploymentId}/activity`);
+      const res = await fleetFetch(`/fleet/${deploymentId}/activity`);
       if (res.ok) {
         const data = await res.json();
         set((state) => ({
