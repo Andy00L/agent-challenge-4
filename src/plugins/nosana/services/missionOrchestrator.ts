@@ -431,77 +431,140 @@ function stepStatusForClient(node: PipelineNode): MissionPipelineState['steps'][
   return node.status;
 }
 
-// ── Prompts ──────────────────────────────────────────────
+// ── Anti-Reflection ──────────────────────────────────────
 
-function buildRootPrompt(task: string, mission?: string, template?: string): string {
-  if (template === 'researcher') {
-    return [
-      'ROLE: You are a RESEARCH SPECIALIST executing a live task on a GPU node.',
-      '',
-      'CRITICAL RULES (violating any of these FAILS the task):',
-      '1. Your ENTIRE response must be the research output itself: facts, data, findings.',
-      '2. Your response must START with "## Key Findings" on the very first line.',
-      '3. If you have web search capabilities, USE THEM NOW before writing.',
-      '4. MINIMUM 600 words of substantive research content.',
-      '',
-      `TASK: ${task}`,
-      '',
-      mission ? `MISSION CONTEXT: ${mission}` : '',
-      '',
-      'OUTPUT FORMAT:',
-      'Start with "## Key Findings" and provide:',
-      '- At least 5 specific, detailed findings with concrete data points',
-      '- Source attributions where possible (company names, dates, statistics)',
-      '- Each finding should be 3-5 sentences with specific details',
-      '- End with a "## Summary" section',
-      '',
-      'FIRST LINE OF YOUR RESPONSE MUST BE: "## Key Findings"',
-      '',
-      'FORBIDDEN (your response will be REJECTED if it contains any of these):',
-      '- "I will research" / "I\'ll search" / "Let me find" / "Let me look into"',
-      '- "I don\'t have access to" / "I cannot browse" / "Starting research now"',
-      '- "[placeholder]" / "[insert]" / "TBD" / "further research needed"',
-      '- Any opening sentence that describes your INTENT rather than presenting FINDINGS',
-      '',
-      'BEGIN YOUR RESEARCH OUTPUT NOW:',
-    ].filter(Boolean).join('\n');
+const ANTI_REFLECTION = [
+  'FORBIDDEN (your response will be REJECTED if it contains ANY of these):',
+  '- "Sure" / "Of course" / "Certainly" / "Absolutely" / "Great question"',
+  '- "I will write" / "I\'ll create" / "Let me" / "I\'d be happy to"',
+  '- "Here is" / "Here\'s" / "Based on" / "According to"',
+  '- "Starting now" / "I don\'t have access" / "Unfortunately"',
+  '- "[placeholder]" / "[insert]" / "would need to" / "TBD"',
+  '- Any opening that is NOT the deliverable itself',
+].join('\n');
+
+/**
+ * Strip common LLM reflection/acknowledgment prefixes from worker output.
+ * Workers should produce content directly, but quantized models sometimes prepend filler.
+ */
+function stripReflection(text: string): string {
+  const patterns = [
+    /^Sure!?\s*/i,
+    /^Here(?:'s| is| are)\s+(?:the|your|a|an)\s+\w+[.:!]?\s*/i,
+    /^I'?(?:ll|d| will| would)\s+\w+.*?\.\s*/i,
+    /^Based on\s+.*?\.\s*/i,
+    /^Let me\s+\w+.*?\.\s*/i,
+    /^Of course!?\s*/i,
+    /^Certainly!?\s*/i,
+    /^Absolutely!?\s*/i,
+    /^Great(?:\s+\w+)?!?\s*/i,
+    /^I'?d?\s+be\s+happy\s+to.*?\.\s*/i,
+  ];
+  let cleaned = text;
+  for (const p of patterns) {
+    cleaned = cleaned.replace(p, '');
   }
+  return cleaned.trim() || text;
+}
 
+// ── Template-Specific Prompt Builders ────────────────────
+//
+// Each builder produces a prompt ALIGNED with the template's system prompt
+// (set via AGENT_SYSTEM_PROMPT env var from types.ts defaultPrompt).
+//
+// System prompt alignment:
+//   researcher  → prose/markdown, ## headings, citations
+//   writer      → prose/markdown, # title, long-form
+//   analyst     → structured analysis, tables, ## sections
+//   scene-writer → JSON array only (no prose, no markdown)
+//   monitor     → factual report, ## headings
+//   publisher   → short social copy, direct content
+//
+// Direct-execution templates (image-generator, video-generator, narrator)
+// bypass these builders entirely — they never reach executeOne().
+
+// ── Researcher ──────────────────────────────────────────
+
+function buildResearcherWithTavilyPrompt(task: string, tavilyResults: string): string {
   return [
-    'ROLE: You are a specialist executing a task. Your response IS the deliverable.',
+    'ROLE: You are a RESEARCH ANALYST. Analyze the web search results below and produce a research report.',
     '',
-    'CRITICAL RULES (violating any of these FAILS the task):',
-    '1. START your response with the actual content. The first word must be part of the deliverable.',
-    '2. Do NOT acknowledge, plan, or outline. Just produce the final result.',
-    '3. MINIMUM 600 words of actual content.',
+    'CRITICAL RULES:',
+    '1. START with "## Key Findings" on the very first line.',
+    '2. Synthesize the search results into organized findings with facts, dates, and specifics.',
+    '3. Cite sources by number [1], [2], etc.',
+    '4. Do NOT say "I\'ll research this" or "Let me search" — the search is ALREADY DONE.',
+    '5. Your response IS the deliverable. No preamble.',
+    '6. MINIMUM 500 words of substantive analysis.',
     '',
     `TASK: ${task}`,
     '',
-    'FORMAT: Start with a markdown heading ("# [Title]") then write the complete content.',
-    'Include specific facts, examples, names, and details.',
-    'Do NOT ask clarifying questions. Execute with your best judgment.',
+    '=== WEB SEARCH RESULTS (from Tavily) ===',
     '',
-    'FIRST LINE OF YOUR RESPONSE MUST BE: "# [Your Title Here]"',
+    tavilyResults,
     '',
-    'FORBIDDEN (your response will be REJECTED if it contains):',
-    '- "I will write" / "Starting now" / "Let me help" / "I\'ll create"',
-    '- "Sure" / "Of course" / "Absolutely" / "Great question"',
-    '- "[placeholder]" / "[insert]" / "would need to"',
-    '- Any opening that is NOT the deliverable itself',
+    '=== END SEARCH RESULTS ===',
     '',
-    'PRODUCE YOUR COMPLETE OUTPUT NOW:',
+    ANTI_REFLECTION,
+    '',
+    'Now synthesize these results. Start with "## Key Findings":',
   ].join('\n');
 }
 
-function buildSequentialPrompt(task: string, parentOutput: string): string {
+function buildResearcherFallbackPrompt(task: string, missionText?: string): string {
   return [
-    'ROLE: You are a specialist producing a deliverable from source material.',
+    'ROLE: You are a RESEARCH SPECIALIST.',
     '',
-    'CRITICAL RULES (violating any of these FAILS the task):',
-    '1. START your response with the actual content (title, heading, or opening line).',
-    '2. Do NOT acknowledge the input. Do NOT say "Based on the research provided..."',
-    '3. Do NOT summarize what you received. TRANSFORM it into the deliverable.',
-    '4. MINIMUM 800 words for blog posts/articles, 600 words for scripts, 500 words for analysis.',
+    'CRITICAL RULES:',
+    '1. START with "## Key Findings" on the very first line.',
+    '2. Use your training knowledge to produce comprehensive findings.',
+    '3. Include specific facts, dates, numbers, and names.',
+    '4. Do NOT say "I\'ll research this" — produce the research NOW.',
+    '5. MINIMUM 500 words.',
+    '',
+    `TASK: ${task}`,
+    missionText ? `\nMISSION CONTEXT: ${missionText}` : '',
+    '',
+    ANTI_REFLECTION,
+    '',
+    'Produce a detailed research report. Start with "## Key Findings":',
+  ].filter(Boolean).join('\n');
+}
+
+// ── Writer ──────────────────────────────────────────────
+// System prompt: "content writer... produce high-quality written content"
+// → Always prose/markdown. Varies by root vs sequential vs merge.
+
+function buildWriterRootPrompt(task: string, missionText?: string): string {
+  return [
+    'ROLE: You are a content writer creating original material.',
+    '',
+    'CRITICAL RULES:',
+    '1. START with the title: "# [Your Title]" on the very first line.',
+    '2. No preamble. No planning. Just write.',
+    '3. MINIMUM 600 words.',
+    '4. Use markdown formatting: headings (##), bold, lists where appropriate.',
+    '5. Include specific facts, examples, names, and details.',
+    '',
+    `TASK: ${task}`,
+    missionText ? `\nMISSION CONTEXT: ${missionText}` : '',
+    '',
+    ANTI_REFLECTION,
+    '',
+    'BEGIN NOW (first line must be "# [Title]"):',
+  ].filter(Boolean).join('\n');
+}
+
+function buildWriterSequentialPrompt(task: string, parentOutput: string): string {
+  return [
+    'ROLE: You are a content writer transforming source material into polished content.',
+    '',
+    'CRITICAL RULES:',
+    '1. START with "# [Your Title]" on the very first line.',
+    '2. Do NOT acknowledge the input. TRANSFORM it into the deliverable.',
+    '3. Do NOT summarize what you received. Create NEW content from it.',
+    '4. MINIMUM 800 words.',
+    '5. Use markdown: headings (##), bold, lists, blockquotes where appropriate.',
     '',
     '=== SOURCE MATERIAL ===',
     parentOutput,
@@ -509,36 +572,26 @@ function buildSequentialPrompt(task: string, parentOutput: string): string {
     '',
     `TASK: ${task}`,
     '',
-    'FORMAT:',
-    '- For blog posts/articles: Start with "# [Your Title]" then write the full piece',
-    '- For video scripts: Start with "[INTRO]" then write scene-by-scene',
-    '- For analysis/reports: Start with "## Executive Summary" then structured sections',
-    '- For any other format: Start directly with the content, no preamble',
+    ANTI_REFLECTION,
+    '- "Based on the research provided" / "The research shows that"',
+    '- "The previous agent" / Any meta-commentary about source material',
     '',
-    'YOUR FIRST LINE must be the title, heading, or opening line of the deliverable.',
-    '',
-    'FORBIDDEN (your response will be REJECTED if it contains):',
-    '- "Based on the research provided" / "Using the input above" / "According to the data"',
-    '- "I will now write" / "Let me create" / "Here is" / "Here\'s"',
-    '- "The previous agent" / "The research shows that" / "Based on"',
-    '- Any meta-commentary about the task, the source material, or your process',
-    '',
-    'PRODUCE THE DELIVERABLE NOW:',
+    'PRODUCE THE CONTENT NOW (first line must be "# [Title]"):',
   ].join('\n');
 }
 
-function buildMergePrompt(task: string, parentOutputs: { name: string; output: string }[]): string {
+function buildWriterMergePrompt(task: string, parentOutputs: { name: string; output: string }[]): string {
   const sections = parentOutputs.map((p, i) =>
-    `=== SOURCE ${i + 1} of ${parentOutputs.length} ===\n${p.output}\n=== END SOURCE ${i + 1} ===`
+    `=== SOURCE ${i + 1}: ${p.name} ===\n${p.output}\n=== END SOURCE ${i + 1} ===`
   ).join('\n\n');
 
   return [
-    'ROLE: You are a SENIOR EDITOR producing a final deliverable from multiple source documents.',
+    'ROLE: You are a SENIOR EDITOR merging multiple sources into one polished document.',
     '',
-    'CRITICAL RULES (violating any of these FAILS the task):',
-    '1. Your response IS the final document. No preamble. No commentary.',
-    '2. START with "# [Compelling Title]" on the very first line.',
-    '3. MERGE and ENHANCE the sources. Do NOT just concatenate them.',
+    'CRITICAL RULES:',
+    '1. START with "# [Compelling Title]" on the very first line.',
+    '2. MERGE and ENHANCE the sources into a unified piece.',
+    '3. Organize by THEME, not by source.',
     '4. The reader must NEVER know this was assembled from multiple sources.',
     '5. MINIMUM 1000 words.',
     '',
@@ -546,48 +599,268 @@ function buildMergePrompt(task: string, parentOutputs: { name: string; output: s
     '',
     `TASK: ${task}`,
     '',
-    'STRUCTURE YOUR DOCUMENT AS:',
-    '1. # Title (compelling, specific to the topic)',
-    '2. ## Executive Summary (2-3 sentences capturing the key insight)',
-    '3. ## Main sections organized by THEME (not by source)',
-    '4. Include a markdown comparison table if comparing items',
-    '5. ## Key Takeaways (3-5 bullet points)',
-    '6. ## Recommendation or Conclusion',
+    'STRUCTURE:',
+    '1. # Title',
+    '2. ## Executive Summary (2-3 sentences)',
+    '3. ## Thematic sections',
+    '4. Comparison table (markdown) if comparing items',
+    '5. ## Key Takeaways (3-5 bullets)',
+    '6. ## Conclusion',
     '',
-    'YOUR FIRST LINE MUST BE: "# [Compelling Title Related to the Topic]"',
-    '',
-    'ABSOLUTE PROHIBITION (these make your response FAIL):',
-    '- "I have analyzed" / "I\'ll now synthesize" / "Let me integrate"',
+    ANTI_REFLECTION,
     '- "Source 1 provides" / "Source 2 covers" or ANY reference to sources by number',
-    '- "The following document" / "This report will" / "In this analysis"',
-    '- ANY reference to "agents", "inputs", "sources", "pipeline", or the assembly process',
-    '- ANY sentence starting with "I" followed by a verb describing your editorial process',
-    '- ANY meta-commentary about what you are about to do or have done',
+    '- ANY reference to "agents", "inputs", "sources", "pipeline", or assembly',
     '',
-    'WRITE THE FINAL DOCUMENT NOW:',
+    'WRITE THE FINAL DOCUMENT NOW (first line must be "# [Title]"):',
   ].join('\n');
 }
 
-function buildFallbackPrompt(task: string, missionText: string): string {
+// ── Analyst ─────────────────────────────────────────────
+// System prompt: "data analyst... analyze datasets, generate insights, identify trends"
+// → Structured analysis with tables. First line: "## Analysis Summary"
+
+function buildAnalystRootPrompt(task: string, missionText?: string): string {
   return [
-    'ROLE: You are a specialist executing a task independently using your own knowledge.',
+    'ROLE: You are a data analyst producing a structured analysis report.',
     '',
     'CRITICAL RULES:',
-    '1. START with the actual content (heading or first finding). No preamble.',
-    '2. Do NOT mention limitations, apologize, or explain constraints.',
-    '3. Produce the BEST deliverable you can with your training knowledge.',
-    '4. MINIMUM 600 words.',
+    '1. START with "## Analysis Summary" on the very first line.',
+    '2. Include comparisons, patterns, trends, and insights.',
+    '3. Use markdown tables when comparing items.',
+    '4. Support claims with specific data points.',
+    '5. MINIMUM 500 words.',
+    '',
+    `TASK: ${task}`,
+    missionText ? `\nMISSION CONTEXT: ${missionText}` : '',
+    '',
+    'FORMAT:',
+    '## Analysis Summary — 2-3 sentence overview',
+    '## Detailed Findings — structured analysis with subsections',
+    '## Comparison (if applicable) — markdown table',
+    '## Key Insights — numbered list',
+    '## Recommendations — actionable items',
+    '',
+    ANTI_REFLECTION,
+    '',
+    'BEGIN YOUR ANALYSIS NOW (first line must be "## Analysis Summary"):',
+  ].filter(Boolean).join('\n');
+}
+
+function buildAnalystSequentialPrompt(task: string, parentOutput: string): string {
+  return [
+    'ROLE: You are a data analyst producing a structured analysis from source data.',
+    '',
+    'CRITICAL RULES:',
+    '1. START with "## Analysis Summary" on the very first line.',
+    '2. Analyze the data — find patterns, trends, comparisons.',
+    '3. Use markdown tables when comparing items.',
+    '4. Support claims with specific data points from the source.',
+    '5. MINIMUM 500 words.',
+    '',
+    '=== DATA TO ANALYZE ===',
+    parentOutput,
+    '=== END DATA ===',
     '',
     `TASK: ${task}`,
     '',
-    `MISSION CONTEXT: ${missionText}`,
+    'FORMAT:',
+    '## Analysis Summary — 2-3 sentence overview',
+    '## Detailed Findings — structured analysis with subsections',
+    '## Comparison (if applicable) — markdown table',
+    '## Key Insights — numbered list',
+    '## Recommendations — actionable items',
     '',
-    'FIRST LINE must be a heading ("# [Title]") or key finding. No meta-commentary.',
+    ANTI_REFLECTION,
     '',
-    'FORBIDDEN: "I will" / "Let me" / "I don\'t have access" / "Unfortunately"',
+    'BEGIN YOUR ANALYSIS NOW (first line must be "## Analysis Summary"):',
+  ].join('\n');
+}
+
+function buildAnalystMergePrompt(task: string, parentOutputs: { name: string; output: string }[]): string {
+  const sections = parentOutputs.map((p, i) =>
+    `=== DATA SOURCE ${i + 1}: ${p.name} ===\n${p.output}\n=== END DATA SOURCE ${i + 1} ===`
+  ).join('\n\n');
+
+  return [
+    'ROLE: You are a data analyst synthesizing multiple data sources into one analysis.',
+    '',
+    'CRITICAL RULES:',
+    '1. START with "## Analysis Summary" on the very first line.',
+    '2. Cross-reference and compare data across sources.',
+    '3. Use markdown tables for comparisons.',
+    '4. Identify agreements, contradictions, and unique insights.',
+    '5. MINIMUM 600 words.',
+    '',
+    sections,
+    '',
+    `TASK: ${task}`,
+    '',
+    'FORMAT:',
+    '## Analysis Summary — 2-3 sentence overview',
+    '## Cross-Source Findings — analysis organized by theme',
+    '## Comparison Table — markdown table',
+    '## Key Insights — numbered list',
+    '## Recommendations — actionable items',
+    '',
+    ANTI_REFLECTION,
+    '',
+    'BEGIN YOUR ANALYSIS NOW (first line must be "## Analysis Summary"):',
+  ].join('\n');
+}
+
+// ── Scene Writer ────────────────────────────────────────
+// System prompt: "break content into individual visual scenes... Output structured JSON"
+// → JSON array ONLY. No prose. No markdown. No backticks.
+
+function buildSceneWriterPrompt(task: string, sourceContent: string): string {
+  return [
+    'ROLE: You are a scene description writer for video production.',
+    '',
+    'OUTPUT FORMAT: Respond with ONLY a JSON array. No markdown. No explanation.',
+    'No backticks. No ```json. ONLY the raw JSON array.',
+    '',
+    'Each scene object must have exactly these fields:',
+    '  "sceneNumber": integer starting at 1',
+    '  "title": short scene title string',
+    '  "narration": 2-3 sentence voiceover text string',
+    '  "imagePrompt": detailed 50-100 word visual description for AI image generation (describe as a photograph or painting)',
+    '  "durationSeconds": integer between 5 and 8',
+    '',
+    '=== SOURCE CONTENT ===',
+    sourceContent,
+    '=== END SOURCE CONTENT ===',
+    '',
+    `TASK: ${task}`,
+    '',
+    'RULES:',
+    '1. Create 4-6 scenes that cover the key points.',
+    '2. Each imagePrompt must be standalone and detailed (subject, style, colors, composition, lighting).',
+    '3. Narration should be engaging and suitable for voiceover.',
+    '4. First character of your response MUST be [',
+    '5. Last character of your response MUST be ]',
+    '',
+    'RESPOND WITH ONLY THE JSON ARRAY:',
+  ].join('\n');
+}
+
+// ── Monitor ─────────────────────────────────────────────
+// System prompt: "monitoring agent... scan sources for new information... report findings"
+// → Factual report. First line: "## Monitoring Report"
+
+function buildMonitorPrompt(task: string, sourceContent: string, missionText?: string): string {
+  return [
+    'ROLE: You are a monitoring analyst tracking changes and updates.',
+    '',
+    'CRITICAL RULES:',
+    '1. START with "## Monitoring Report" on the very first line.',
+    '2. Focus on what changed, what is new, what needs attention.',
+    '3. Use specific timestamps, numbers, and facts.',
+    '4. Flag anything urgent with WARNING.',
+    '5. Be concise but thorough.',
+    '',
+    sourceContent ? `=== MONITORING DATA ===\n${sourceContent}\n=== END DATA ===\n` : '',
+    `TASK: ${task}`,
+    missionText && !sourceContent ? `\nMISSION CONTEXT: ${missionText}` : '',
+    '',
+    ANTI_REFLECTION,
+    '',
+    'BEGIN YOUR REPORT NOW (first line must be "## Monitoring Report"):',
+  ].filter(Boolean).join('\n');
+}
+
+// ── Publisher ───────────────────────────────────────────
+// System prompt: "social publishing agent... publish content... with formatting, hashtags"
+// → Short social copy. No headings. Direct content. Emojis/hashtags welcome.
+
+function buildPublisherPrompt(task: string, sourceContent: string): string {
+  return [
+    'ROLE: You are a social media content creator.',
+    '',
+    'CRITICAL RULES:',
+    '1. START directly with the content. First word must be part of the post.',
+    '2. Adapt format to the platform requested in the task.',
+    '3. Use hooks, engagement techniques, emojis, and hashtags where appropriate.',
+    '4. Keep within platform character limits (Twitter/X: 280, LinkedIn: 3000).',
+    '5. If no platform specified, write for a general social audience.',
+    '',
+    sourceContent ? `=== SOURCE MATERIAL ===\n${sourceContent}\n=== END SOURCE MATERIAL ===\n` : '',
+    `TASK: ${task}`,
+    '',
+    ANTI_REFLECTION,
+    '',
+    'BEGIN YOUR CONTENT NOW (start directly with the post):',
+  ].filter(Boolean).join('\n');
+}
+
+// ── Generic Fallback (unknown templates) ────────────────
+
+function buildGenericFallbackPrompt(task: string, missionText: string): string {
+  return [
+    'ROLE: You are a specialist executing a task. Your response IS the deliverable.',
+    '',
+    'CRITICAL RULES:',
+    '1. START with actual content. First line must be "# [Title]" or a heading.',
+    '2. Do NOT acknowledge, plan, or outline. Just produce the result.',
+    '3. MINIMUM 600 words.',
+    '',
+    `TASK: ${task}`,
+    `\nMISSION CONTEXT: ${missionText}`,
+    '',
+    ANTI_REFLECTION,
     '',
     'PRODUCE YOUR COMPLETE OUTPUT NOW:',
   ].join('\n');
+}
+
+// ── Prompt Router ───────────────────────────────────────
+// Routes to the correct template-specific builder based on template name
+// and dependency structure. Called from executeOne() for all non-researcher templates.
+
+function buildPromptForTemplate(
+  template: string,
+  task: string,
+  nodes: PipelineNode[],
+  step: PipelineStep,
+  missionText: string,
+): string {
+  const deps = getDependencies(step);
+
+  // Gather parent outputs
+  const parentData = deps.map(depId => {
+    const parent = nodes.find(n => n.step.id === depId);
+    return { name: parent?.step.name || depId, output: parent?.output || '' };
+  });
+  const hasParent = parentData.some(p => p.output.length > 0);
+  const allSourceContent = hasParent
+    ? parentData.filter(p => p.output.length > 0).map(p => p.output).join('\n\n---\n\n')
+    : '';
+
+  switch (template) {
+    case 'scene-writer':
+      return buildSceneWriterPrompt(task, allSourceContent || missionText);
+
+    case 'writer':
+      if (!hasParent) return buildWriterRootPrompt(task, missionText);
+      if (parentData.length === 1) return buildWriterSequentialPrompt(task, parentData[0].output);
+      return buildWriterMergePrompt(task, parentData);
+
+    case 'analyst':
+      if (!hasParent) return buildAnalystRootPrompt(task, missionText);
+      if (parentData.length === 1) return buildAnalystSequentialPrompt(task, parentData[0].output);
+      return buildAnalystMergePrompt(task, parentData);
+
+    case 'monitor':
+      return buildMonitorPrompt(task, allSourceContent, missionText);
+
+    case 'publisher':
+      return buildPublisherPrompt(task, allSourceContent);
+
+    default:
+      // Unknown template: use generic prose fallback
+      if (!hasParent) return buildGenericFallbackPrompt(task, missionText);
+      if (parentData.length === 1) return buildWriterSequentialPrompt(task, parentData[0].output);
+      return buildWriterMergePrompt(task, parentData);
+  }
 }
 
 /**
@@ -1241,7 +1514,6 @@ Respond with ONLY the JSON array:`,
       syncState('executing');
       log(`node:status — ${node.step.name}: processing`);
 
-      const deps = getDependencies(node.step);
       let prompt: string;
 
       // Researcher: orchestrator calls Tavily directly and injects results into prompt.
@@ -1255,64 +1527,15 @@ Respond with ONLY the JSON array:`,
           const formattedResults = searchResults.map((r, i) =>
             `[${i + 1}] ${r.title}\n    URL: ${r.url}\n    ${r.content}`
           ).join('\n\n');
-          const totalChars = formattedResults.length;
-          log(`Researcher prompt built with ${searchResults.length} Tavily results (${totalChars} chars of context)`);
-
-          prompt = [
-            'ROLE: You are a RESEARCH ANALYST. Your job is to analyze the web search results below and produce a comprehensive research report.',
-            '',
-            'CRITICAL RULES:',
-            '1. Your response must START with "## Key Findings" on the very first line.',
-            '2. Synthesize the search results into organized findings with facts, dates, and specifics.',
-            '3. Cite sources by number [1], [2], etc.',
-            '4. Do NOT say "I\'ll research this" or "Let me search" — the search is ALREADY DONE.',
-            '5. Your response IS the deliverable. Start immediately with content.',
-            '6. MINIMUM 600 words of substantive analysis.',
-            '',
-            `TASK: ${searchQuery}`,
-            '',
-            '=== WEB SEARCH RESULTS (from Tavily) ===',
-            '',
-            formattedResults,
-            '',
-            '=== END SEARCH RESULTS ===',
-            '',
-            'Now synthesize these results into a comprehensive research report. Start with "## Key Findings":',
-          ].join('\n');
+          log(`Researcher prompt built with ${searchResults.length} Tavily results (${formattedResults.length} chars of context)`);
+          prompt = buildResearcherWithTavilyPrompt(searchQuery, formattedResults);
         } else {
           log('No Tavily results, researcher will use LLM knowledge only');
-          prompt = [
-            'ROLE: You are a RESEARCH SPECIALIST.',
-            '',
-            'CRITICAL RULES:',
-            '1. Your response must START with "## Key Findings" on the very first line.',
-            '2. Use your training knowledge to produce comprehensive findings.',
-            '3. Include specific facts, dates, numbers, and names.',
-            '4. Do NOT say "I\'ll research this" — produce the research NOW.',
-            '5. Your response IS the deliverable.',
-            '6. MINIMUM 600 words.',
-            '',
-            `TASK: ${searchQuery}`,
-            '',
-            'Produce a detailed research report. Start with "## Key Findings":',
-          ].join('\n');
+          prompt = buildResearcherFallbackPrompt(searchQuery, missionText);
         }
-      } else if (deps.length === 0) {
-        prompt = buildRootPrompt(node.step.task, missionText, node.step.template);
-      } else if (deps.length === 1) {
-        const parent = nodes.find(n => n.step.id === deps[0]);
-        prompt = parent?.output
-          ? buildSequentialPrompt(node.step.task, parent.output)
-          : buildFallbackPrompt(node.step.task, missionText);
       } else {
-        const parentOutputs = deps.map(depId => {
-          const parent = nodes.find(n => n.step.id === depId);
-          return { name: parent?.step.name || depId, output: parent?.output || '(no output from this agent)' };
-        });
-        const hasAnyOutput = parentOutputs.some(p => p.output !== '(no output from this agent)');
-        prompt = hasAnyOutput
-          ? buildMergePrompt(node.step.task, parentOutputs)
-          : buildFallbackPrompt(node.step.task, missionText);
+        // All other templates: route to template-specific prompt builder
+        prompt = buildPromptForTemplate(node.step.template, node.step.task, nodes, node.step, missionText);
       }
 
       try {
@@ -1327,9 +1550,17 @@ Respond with ONLY the JSON array:`,
         const isResearcher = node.step.template === 'researcher';
         const timeoutMs = TEMPLATE_TIMEOUT_MS[node.step.template] || 300_000;
         const rawOutput = await client.sendMessage(agentId, prompt, timeoutMs, checkAlive, isResearcher, abortSignal);
-        const output = deduplicateOutput(rawOutput);
+        let output = deduplicateOutput(rawOutput);
         if (output.length !== rawOutput.length) {
           log(`node:dedup — ${node.step.name}: ${rawOutput.length} → ${output.length} chars (removed repeated content)`);
+        }
+        // Strip reflection prefixes for prose templates (not JSON like scene-writer)
+        if (node.step.template !== 'scene-writer') {
+          const cleaned = stripReflection(output);
+          if (cleaned !== output) {
+            log(`node:strip — ${node.step.name}: stripped reflection prefix (${output.length} → ${cleaned.length} chars)`);
+            output = cleaned;
+          }
         }
         node.output = output;
         node.status = 'complete';

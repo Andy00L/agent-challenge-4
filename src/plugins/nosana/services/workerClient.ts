@@ -54,9 +54,10 @@ function isIntermediateResponse(text: string): boolean {
   // Weak patterns only match for short texts
   if (text.length < 150 && WEAK_INTERMEDIATE_PATTERNS.some(p => p.test(text))) return true;
 
-  // Very short responses (< 80 chars) that don't start with markdown headings are suspicious
+  // Very short responses (< 80 chars) that don't start with markdown headings or JSON are suspicious
   const trimmed = text.trim();
-  if (trimmed.length < 80 && !trimmed.startsWith('#') && !trimmed.startsWith('##')) return true;
+  if (trimmed.length < 80 && !trimmed.startsWith('#') && !trimmed.startsWith('##')
+    && !trimmed.startsWith('[') && !trimmed.startsWith('{')) return true;
 
   return false;
 }
@@ -161,8 +162,16 @@ export class WorkerClient {
       ? ar
       : ar.text || ar.content?.text || '';
 
-    // Reject empty or trivially short
-    if (!responseText || responseText.length < 20) return null;
+    // Reject empty
+    if (!responseText) return null;
+    // Allow short responses if they look like JSON (starts with [ or {)
+    const trimmed = responseText.trim();
+    const looksLikeJson = trimmed.startsWith('[') || trimmed.startsWith('{');
+    // Reject trivially short non-JSON responses
+    if (responseText.length < 20 && !looksLikeJson) {
+      console.log(`[AgentForge:Worker] extractResponseText rejecting short response (${responseText.length} chars): "${responseText}"`);
+      return null;
+    }
     // Reject if it's just echoing the input
     if (responseText === inputText) return null;
     // Reject JSON metadata objects (no real text field found, fell through to stringify)
@@ -320,7 +329,7 @@ export class WorkerClient {
             httpResponseText = extracted;
             console.log(`[AgentForge:Worker] Extracted HTTP response: ${extracted.length} chars, "${extracted.slice(0, 120)}"`);
           } else {
-            console.log(`[AgentForge:Worker] extractResponseText returned null (raw=${rawText.length} chars, empty/short/echo)`);
+            console.log(`[AgentForge:Worker] extractResponseText returned null (raw=${rawText.length} chars, empty/short/echo): "${rawText.slice(0, 200)}"`);
           }
         } catch (parseErr) {
           console.warn('[AgentForge:Worker] Failed to parse HTTP response body:', parseErr);
@@ -396,7 +405,9 @@ export class WorkerClient {
         const authorId = m.authorId || m.author_id || m.entityId || '';
         const isOrchestrator = authorId === ORCHESTRATOR_USER_ID;
         const content = typeof m.content === 'string' ? m.content : m.content?.text || '';
-        const tooShort = content.length < 20;
+        const contentTrimmed = content.trim();
+        const contentLooksLikeJson = contentTrimmed.startsWith('[') || contentTrimmed.startsWith('{');
+        const tooShort = content.length < 20 && !contentLooksLikeJson;
         const isEcho = content === text;
 
         // Log filter reasoning for NEW messages
