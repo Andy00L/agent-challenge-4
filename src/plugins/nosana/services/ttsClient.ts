@@ -1,5 +1,5 @@
 // Text-to-Speech with automatic fallback chain and word-level timestamps.
-// Priority: OpenAI TTS → ElevenLabs → fal.ai → Coqui on Nosana GPU → null
+// Priority: ElevenLabs → OpenAI TTS → fal.ai → Coqui on Nosana GPU → null
 
 // ── Interfaces ───────────────────────────────────────────
 
@@ -280,23 +280,23 @@ export async function generateTTS(text: string): Promise<TTSResult | null> {
   const falKey = process.env.FAL_API_KEY;
   const nosanaKey = process.env.NOSANA_API_KEY;
 
-  // Backend 1: OpenAI TTS (only when pointing at real OpenAI, not Nosana/Ollama)
-  if (openaiKey && openaiUrl.includes('openai.com')) {
-    try {
-      console.log('[AgentForge:TTS] Using OpenAI TTS');
-      return await generateWithOpenAI(text, openaiKey);
-    } catch (err: any) {
-      console.warn(`[AgentForge:TTS] OpenAI TTS failed: ${err.message}, trying next`);
-    }
-  }
-
-  // Backend 2: ElevenLabs
+  // Backend 1: ElevenLabs (best quality, real word-level timestamps)
   if (elevenlabsKey) {
     try {
-      console.log('[AgentForge:TTS] Using ElevenLabs TTS');
+      console.log('[AgentForge:TTS] Using ElevenLabs TTS (primary)');
       return await generateWithElevenLabs(text, elevenlabsKey);
     } catch (err: any) {
       console.warn(`[AgentForge:TTS] ElevenLabs failed: ${err.message}, trying next`);
+    }
+  }
+
+  // Backend 2: OpenAI TTS (only when pointing at real OpenAI, not Nosana/Ollama)
+  if (openaiKey && openaiUrl.includes('openai.com')) {
+    try {
+      console.log('[AgentForge:TTS] Using OpenAI TTS (fallback)');
+      return await generateWithOpenAI(text, openaiKey);
+    } catch (err: any) {
+      console.warn(`[AgentForge:TTS] OpenAI TTS failed: ${err.message}, trying next`);
     }
   }
 

@@ -2,7 +2,6 @@ import { getNosanaManager } from './nosanaManager.js';
 import { WorkerClient } from './workerClient.js';
 import { AGENT_TEMPLATES } from '../types.js';
 import { ImageGenRouter } from './imageGenRouter.js';
-import { VideoGenRouter } from './videoGenRouter.js';
 import { generateTTS } from './ttsClient.js';
 import { MediaAssembler } from './mediaAssembler.js';
 
@@ -159,7 +158,7 @@ function detectCapabilities() {
   const hasNosana = !!(process.env.NOSANA_API_KEY && process.env.NOSANA_API_KEY !== 'YOUR_NOSANA_API_KEY');
   return {
     imageGen: !!((process.env.OPENAI_API_KEY && (process.env.OPENAI_API_URL || '').includes('openai.com')) || process.env.FAL_KEY || process.env.COMFYUI_ENDPOINT || process.env.A1111_ENDPOINT || hasNosana),
-    videoGen: !!(process.env.FAL_KEY || process.env.WAN_VIDEO_ENDPOINT || hasNosana),
+    videoGen: !!((process.env.OPENAI_API_KEY && (process.env.OPENAI_API_URL || '').includes('openai.com')) || process.env.FAL_KEY || process.env.COMFYUI_ENDPOINT || process.env.A1111_ENDPOINT || hasNosana),
     tts: !!((process.env.OPENAI_API_KEY && (process.env.OPENAI_API_URL || '').includes('openai.com')) || process.env.ELEVENLABS_API_KEY || process.env.FAL_API_KEY || hasNosana),
   };
 }
@@ -889,7 +888,7 @@ function deduplicateOutput(text: string): string {
   return kept;
 }
 
-// ── Scene parser for slideshow fallback ──────────────────
+// ── Scene parser for slideshow video pipeline ────────────
 
 interface ParsedScene {
   sceneNumber: number;
@@ -935,6 +934,33 @@ function parseScenes(output: string | undefined): ParsedScene[] {
   }));
 }
 
+// ── Slideshow helpers ────────────────────────────────────
+
+function formatTime(seconds: number): string {
+  const min = Math.floor(seconds / 60);
+  const sec = seconds % 60;
+  return `${min.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
+}
+
+function buildTimestampedNarration(scenes: ParsedScene[]): string {
+  let time = 0;
+  return scenes.map(scene => {
+    const start = formatTime(time);
+    time += scene.durationSeconds || 6;
+    const end = formatTime(time);
+    return `${start}-${end} | Scene ${scene.sceneNumber}: ${scene.narration || scene.title || 'N/A'}`;
+  }).join('\n');
+}
+
+function buildScriptMarkdown(scenes: ParsedScene[]): string {
+  return scenes.map(scene =>
+    `### Scene ${scene.sceneNumber}: ${scene.title || ''}\n\n` +
+    `**Narration:** ${scene.narration || 'N/A'}\n\n` +
+    `**Image prompt:** ${scene.imagePrompt || 'N/A'}\n\n` +
+    `**Duration:** ${scene.durationSeconds || 6}s`
+  ).join('\n\n---\n\n');
+}
+
 // ── Orchestrator ─────────────────────────────────────────
 
 export class MissionOrchestrator {
@@ -978,7 +1004,7 @@ TEMPLATE values:
 - "writer" (content creation — TEXT output)
 - "scene-writer" (breaks content into visual scenes with image descriptions — TEXT output)
 - "image-generator" (generates an image from text — IMAGE output) — ONLY if image gen is available
-- "video-generator" (generates a short video from text — VIDEO output) — ONLY if video gen is available
+- "video-generator" (assembles a slideshow video from scene images + narrated audio — VIDEO output) — ONLY if video gen is available. REQUIRES scene-writer and narrator as inputs.
 - "narrator" (converts text to speech audio — AUDIO output) — ONLY if TTS is available
 
 ${capabilitiesNote}
@@ -996,7 +1022,7 @@ TASK field rules (CRITICAL for output quality):
 - For analysts: "Produce a structured analysis with executive summary, comparison table, key findings, and recommendations about [topic]."
 - For scene-writers: "Break the content into 4-6 scenes. For each scene provide: scene number, title, narration text (2-3 sentences), and a detailed image prompt."
 - For image-generators: The task IS the image prompt — be detailed about subject, style, colors, composition.
-- For video-generators: The task IS the video prompt — describe what should happen in the video.
+- For video-generators: "Assemble a slideshow video from the scene images and narration audio." The video-generator MUST depend on scene-writer and narrator steps.
 - For narrators: The task IS the text to convert to speech.
 - Be SPECIFIC. Vague tasks produce vague outputs.
 
@@ -1006,6 +1032,7 @@ MULTIMODAL PIPELINE RULES:
 3. Multiple image-generators can run in PARALLEL (same dependsOn value).
 4. Only include multimodal steps if the mission EXPLICITLY asks for visual content, video, images, or audio.
 5. For text-only missions (research, blog posts, analysis), stick to researcher/writer/analyst.
+6. video-generator MUST depend on BOTH a scene-writer AND a narrator step. It assembles scene images + narrated audio into an MP4 slideshow.
 
 NAME field: short PascalCase (e.g. "AIResearcher", "BlogWriter", "CompetitiveAnalyst", "SceneWriter", "ImageGen1")
 
@@ -1083,8 +1110,8 @@ Respond with ONLY the JSON array:`,
         removedIds.add(step.id);
         return false;
       }
-      if (step.template === 'video-generator' && !capabilities.videoGen) {
-        console.warn(`[AgentForge:Orchestrator] Removed ${step.name}: video generation not configured`);
+      if (step.template === 'video-generator' && !capabilities.imageGen) {
+        console.warn(`[AgentForge:Orchestrator] Removed ${step.name}: image generation not configured (required for slideshow video)`);
         removedIds.add(step.id);
         return false;
       }
@@ -1639,50 +1666,78 @@ Respond with ONLY the JSON array:`,
       }
 
       if (template === 'video-generator') {
-        if (!capabilities.videoGen) {
-          narrate(`\u{26A0}\u{FE0F} **Video generation not available.** Skipping "${node.step.name}". Configure FAL_KEY or WAN_VIDEO_ENDPOINT in .env to enable.`);
-          node.status = 'skipped';
-          node.output = '[Video generation not configured — step skipped]';
-          node.outputType = 'text';
-          syncState();
-          return;
-        }
+        // Slideshow video pipeline: scene images + TTS audio + FFmpeg → MP4
+        node.status = 'processing';
+        syncState('executing');
+        narrate(`\u{1F3AC} **${node.step.name}** generating slideshow video...`);
+
         try {
-          node.status = 'processing';
-          syncState('executing');
-          narrate(`\u{1F3AC} **${node.step.name}** generating video...`);
-          const result = await VideoGenRouter.generate(inputText);
-          node.output = result.url;
-          node.outputType = 'video';
-          node.outputUrls = [result.url];
-          node.status = 'complete';
-          log(`node:status — ${node.step.name}: complete (video)`);
-          syncState();
-        } catch (err: any) {
-          // GPU video generation failed — try DALL-E slideshow fallback
-          log(`Video GPU gen failed: ${err.message}, falling back to DALL-E slideshow`);
-          narrate(`\u{26A0}\u{FE0F} **GPU video generation failed.** Falling back to DALL-E slideshow...`);
+          // 1. Parse scene descriptions from scene-writer sibling
+          const sceneWriterSibling = nodes.find(n => n.step.template === 'scene-writer' && n.status === 'complete');
+          const scenes = parseScenes(sceneWriterSibling?.output || inputText);
+          if (scenes.length === 0) {
+            // No scene-writer output — create a basic scene from parent text
+            const parentText = inputText.slice(0, 500);
+            scenes.push({
+              sceneNumber: 1, title: 'Overview',
+              narration: parentText, imagePrompt: parentText.slice(0, 200),
+              durationSeconds: 8,
+            });
+          }
+          log(`Generating slideshow: ${scenes.length} scenes`);
 
-          try {
-            if (!ImageGenRouter.isAvailable()) {
-              throw new Error('Image generation not available for slideshow fallback');
+          // 2. Generate images — boot SD 1.5 once, reuse for all scenes
+          const assembler = new MediaAssembler();
+          const sceneMedias: Array<{ sceneNumber: number; imagePath: string; durationSeconds: number; title: string }> = [];
+
+          let sd15Url: string | null = null;
+          let sd15Failed = false;
+          const hasNosana = !!(process.env.NOSANA_API_KEY && process.env.NOSANA_API_KEY !== 'YOUR_NOSANA_API_KEY');
+
+          // Try to boot SD 1.5 once for all scenes
+          if (hasNosana && !sd15Failed) {
+            try {
+              const { IMAGE_SERVICE } = await import('./mediaServiceDefinitions.js');
+              narrate(`\u{1F680} Booting SD 1.5 on Nosana GPU...`);
+              sd15Url = await manager.deployMediaService(IMAGE_SERVICE);
+              log(`SD 1.5 ready at ${sd15Url}`);
+            } catch (bootErr: any) {
+              log(`SD 1.5 boot failed: ${bootErr.message} — will use DALL-E/fal.ai per image`);
+              sd15Failed = true;
             }
+          }
 
-            // 1. Parse scene descriptions from scene-writer sibling
-            const sceneWriterSibling = nodes.find(n => n.step.template === 'scene-writer' && n.status === 'complete');
-            const scenes = parseScenes(sceneWriterSibling?.output || inputText);
-            if (scenes.length === 0) {
-              throw new Error('No scenes available for slideshow');
-            }
+          const { A1111Client: A1111 } = await import('./a1111Client.js');
 
-            // 2. Generate DALL-E images for each scene
-            const assembler = new MediaAssembler();
-            const sceneMedias: Array<{ sceneNumber: number; imagePath: string; durationSeconds: number; title: string }> = [];
+          for (const scene of scenes.slice(0, 6)) {
+            let imgResult: { base64?: string; url?: string } | null = null;
 
-            for (const scene of scenes.slice(0, 4)) {
+            // Try warm SD 1.5 first
+            if (sd15Url && !sd15Failed) {
               try {
-                narrate(`\u{1F3A8} Generating image for scene ${scene.sceneNumber}: ${scene.title}`);
-                const imgResult = await ImageGenRouter.generate(scene.imagePrompt);
+                narrate(`\u{1F3A8} Scene ${scene.sceneNumber}: generating with SD 1.5...`);
+                const client = new A1111(sd15Url);
+                const result = await client.generateImage(scene.imagePrompt || scene.narration || `Scene ${scene.sceneNumber}`, '', 512, 512);
+                imgResult = { base64: result.base64 };
+                log(`Scene ${scene.sceneNumber} generated via SD 1.5`);
+              } catch (sdErr: any) {
+                log(`SD 1.5 generation failed for scene ${scene.sceneNumber}: ${sdErr.message} — switching to API backends`);
+                sd15Failed = true;
+              }
+            }
+
+            // API backend fallback (DALL-E, fal.ai, etc.)
+            if (!imgResult) {
+              try {
+                narrate(`\u{1F3A8} Scene ${scene.sceneNumber}: generating image...`);
+                imgResult = await ImageGenRouter.generate(scene.imagePrompt || scene.narration || `Scene ${scene.sceneNumber}`);
+              } catch (imgErr: any) {
+                log(`Scene ${scene.sceneNumber} all backends failed: ${imgErr.message}`);
+              }
+            }
+
+            if (imgResult) {
+              try {
                 let imgSource: string;
                 if (imgResult.url) {
                   imgSource = imgResult.url;
@@ -1693,64 +1748,85 @@ Respond with ONLY the JSON array:`,
                 }
                 const imagePath = await assembler.downloadMedia(imgSource, `scene-${scene.sceneNumber}.png`);
                 sceneMedias.push({
-                  sceneNumber: scene.sceneNumber,
-                  imagePath,
-                  durationSeconds: scene.durationSeconds,
-                  title: scene.title,
+                  sceneNumber: scene.sceneNumber, imagePath,
+                  durationSeconds: scene.durationSeconds, title: scene.title,
                 });
-              } catch (imgErr: any) {
-                log(`Failed to generate slideshow image for scene ${scene.sceneNumber}: ${imgErr.message}`);
+              } catch (dlErr: any) {
+                log(`Scene ${scene.sceneNumber} download failed: ${dlErr.message}`);
               }
             }
-
-            // 3. Get narrator audio if available (narrator may still be running in parallel)
-            const narratorSibling = nodes.find(n => n.step.template === 'narrator' && n.status === 'complete');
-            let audioPath: string | null = null;
-            if (narratorSibling?.outputUrls?.[0]) {
-              try {
-                audioPath = await assembler.downloadMedia(narratorSibling.outputUrls[0], 'narration.mp3');
-              } catch { /* proceed without audio */ }
-            }
-
-            // 4. Assemble slideshow
-            if (sceneMedias.length >= 1) {
-              const videoPath = await assembler.assembleSlideshow(sceneMedias, audioPath);
-              if (videoPath.endsWith('.mp4')) {
-                const videoId = `video-slideshow-${Date.now()}`;
-                const { readFileSync: readFs } = await import('fs');
-                const mediaUrl = storeMediaBuffer(videoId, readFs(videoPath), 'video/mp4');
-                node.output = mediaUrl;
-                node.outputType = 'video';
-                node.outputUrls = [mediaUrl];
-                node.status = 'complete';
-                log(`node:status — ${node.step.name}: complete (slideshow fallback, ${sceneMedias.length} scenes)`);
-                narrate(`\u{2705} **Slideshow video assembled!** ${sceneMedias.length} scenes${audioPath ? ', with narration' : ''}`);
-              } else {
-                // Markdown fallback (FFmpeg not available)
-                const { readFileSync: readFs } = await import('fs');
-                const mdId = `md-slideshow-${Date.now()}`;
-                const mediaUrl = storeMediaBuffer(mdId, readFs(videoPath), 'text/markdown');
-                node.output = mediaUrl;
-                node.outputType = 'text';
-                node.outputUrls = [mediaUrl];
-                node.status = 'complete';
-                log(`node:status — ${node.step.name}: complete (markdown fallback, no FFmpeg)`);
-                narrate(`\u{2705} **Slideshow created as document** (FFmpeg not available for video assembly)`);
-              }
-              syncState();
-            } else {
-              throw new Error(`No images generated for slideshow (0/${scenes.length} scenes succeeded)`);
-            }
-
-            assembler.cleanup();
-          } catch (slideshowErr: any) {
-            log(`Slideshow fallback also failed: ${slideshowErr.message}`);
-            narrate(`\u{26A0}\u{FE0F} **Video and slideshow fallback both failed**: ${slideshowErr.message}. Continuing pipeline.`);
-            node.status = 'error';
-            node.error = `GPU: ${err.message}; Slideshow: ${slideshowErr.message}`;
-            node.output = `[Video generation failed: ${err.message}. Slideshow fallback: ${slideshowErr.message}]`;
-            syncState();
           }
+
+          // 3. Get narrator audio if available
+          const narratorSibling = nodes.find(n => n.step.template === 'narrator' && n.status === 'complete');
+          let audioPath: string | null = null;
+          if (narratorSibling?.outputUrls?.[0]) {
+            try {
+              audioPath = await assembler.downloadMedia(narratorSibling.outputUrls[0], 'narration.mp3');
+            } catch { /* proceed without audio */ }
+          }
+
+          // 4. Assemble based on what we have
+          const hasImages = sceneMedias.length > 0;
+          const hasAudio = !!audioPath;
+
+          if (hasImages) {
+            const videoPath = await assembler.assembleSlideshow(sceneMedias, audioPath);
+            if (videoPath.endsWith('.mp4')) {
+              const videoId = `video-slideshow-${Date.now()}`;
+              const { readFileSync: readFs } = await import('fs');
+              const mediaUrl = storeMediaBuffer(videoId, readFs(videoPath), 'video/mp4');
+              node.output = mediaUrl;
+              node.outputType = 'video';
+              node.outputUrls = [mediaUrl];
+
+              // If no audio, append timestamped narration text so user can add voiceover
+              if (!hasAudio) {
+                const timestamps = buildTimestampedNarration(scenes);
+                node.output = `${mediaUrl}\n\n**Narration timestamps (no audio generated):**\n\`\`\`\n${timestamps}\n\`\`\``;
+              }
+
+              node.status = 'complete';
+              log(`node:status — ${node.step.name}: complete (slideshow, ${sceneMedias.length} scenes, audio=${hasAudio})`);
+              narrate(`\u{2705} **Slideshow video assembled!** ${sceneMedias.length} scenes${hasAudio ? ', with narration' : ' (silent — add voiceover manually)'}`);
+            } else {
+              // FFmpeg not available — return images + audio separately
+              const { readFileSync: readFs } = await import('fs');
+              const mdContent = readFs(videoPath, 'utf-8');
+              node.output = mdContent;
+              node.outputType = 'text';
+              node.status = 'complete';
+              log(`node:status — ${node.step.name}: complete (no FFmpeg — images as markdown)`);
+              narrate(`\u{2705} **Slideshow images ready** (FFmpeg not installed — images provided separately)`);
+            }
+          } else if (hasAudio) {
+            // No images but audio exists — return audio + text script
+            const script = buildScriptMarkdown(scenes);
+            node.output = `**Audio narration generated but image generation failed.**\n\n${script}`;
+            node.outputType = 'text';
+            node.status = 'complete';
+            log(`node:status — ${node.step.name}: complete (audio only, no images)`);
+            narrate(`\u{2705} **Narration audio ready** but image generation failed. Script provided as text.`);
+          } else {
+            // No images, no audio — return complete markdown script
+            const script = buildScriptMarkdown(scenes);
+            const timestamps = buildTimestampedNarration(scenes);
+            node.output = `**Video script** (image and audio generation unavailable):\n\n${script}\n\n---\n\n**Timing:**\n\`\`\`\n${timestamps}\n\`\`\``;
+            node.outputType = 'text';
+            node.status = 'complete';
+            log(`node:status — ${node.step.name}: complete (text script only — no images or audio)`);
+            narrate(`\u{2705} **Video script created** as text document (image/audio backends unavailable)`);
+          }
+
+          syncState();
+          assembler.cleanup();
+        } catch (err: any) {
+          log(`Slideshow video failed: ${err.message}`);
+          narrate(`\u{26A0}\u{FE0F} **Slideshow video failed**: ${err.message}. Continuing pipeline.`);
+          node.status = 'error';
+          node.error = err.message;
+          node.output = `[Slideshow video failed: ${err.message}]`;
+          syncState();
         }
         return;
       }

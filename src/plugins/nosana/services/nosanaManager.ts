@@ -246,7 +246,7 @@ export class NosanaManager {
     const record = this.deployments.get(deploymentId);
     if (!record) throw new Error(`Deployment ${deploymentId} not found`);
 
-    const QUEUE_FALLBACK_MS = 120_000; // 2 min before trying next market
+    const QUEUE_FALLBACK_MS = 30_000; // 30s — we pre-checked node availability, so queue means race condition; cut losses fast
     const MAX_QUEUE_MS = 600_000; // 10 min absolute max
     const queueStart = Date.now();
 
@@ -421,8 +421,8 @@ export class NosanaManager {
     );
   }
 
-  async getMarkets(): Promise<GpuMarket[]> {
-    if (this.cachedMarkets.length > 0 && Date.now() - this.lastMarketFetch < 120_000) {
+  async getMarkets(forceRefresh = false): Promise<GpuMarket[]> {
+    if (!forceRefresh && this.cachedMarkets.length > 0 && Date.now() - this.lastMarketFetch < 120_000) {
       return this.cachedMarkets;
     }
 
@@ -459,6 +459,12 @@ export class NosanaManager {
         };
       });
       markets.sort((a, b) => a.pricePerHour - b.pricePerHour);
+      // One-time debug: dump raw fields from API for diagnosing node availability
+      if (this.cachedMarkets.length === 0 && markets.length > 0) {
+        const sample = apiMarkets[0];
+        console.log(`[AgentForge:Manager] Raw market fields: ${Object.keys(sample).join(', ')}`);
+        console.log(`[AgentForge:Manager] First market raw: ${JSON.stringify(sample).slice(0, 500)}`);
+      }
       this.cachedMarkets = markets;
       this.lastMarketFetch = Date.now();
       return markets;
@@ -509,7 +515,7 @@ export class NosanaManager {
    * @param excludeAddresses - Market addresses to skip (cold/failed markets)
    */
   async getBestMarket(excludeAddresses: string[] = []): Promise<GpuMarket | null> {
-    const markets = await this.getMarkets();
+    const markets = await this.getMarkets(true);
     const excluded = new Set(excludeAddresses);
     const candidates = markets.filter(m =>
       m.pricePerHour > 0 && m.type === 'PREMIUM' && !excluded.has(m.address)
@@ -542,7 +548,7 @@ export class NosanaManager {
    * Prefers markets with available nodes over empty ones.
    */
   async getNextBestMarket(excludeAddresses: string[]): Promise<GpuMarket | null> {
-    const markets = await this.getMarkets();
+    const markets = await this.getMarkets(true);
     const excluded = new Set(excludeAddresses);
     const candidates = markets.filter(m =>
       m.pricePerHour > 0 && m.type === 'PREMIUM' && !excluded.has(m.address)
@@ -618,16 +624,24 @@ export class NosanaManager {
   async getMarketsWithMinVram(minVramGB: number, excludeAddresses: string[] = []): Promise<GpuMarket[]> {
     const markets = await this.getMarkets();
     const excluded = new Set(excludeAddresses);
-    return markets.filter(m =>
+    const eligible = markets.filter(m =>
       m.pricePerHour > 0 &&
       m.type === 'PREMIUM' &&
       !excluded.has(m.address) &&
       estimateGpuVram(m.gpu || m.name) >= minVramGB
     );
+    // Sort: markets with available nodes first, then by price
+    eligible.sort((a, b) => {
+      const aHasNodes = a.nodesAvailable === undefined || a.nodesAvailable > 0 ? 1 : 0;
+      const bHasNodes = b.nodesAvailable === undefined || b.nodesAvailable > 0 ? 1 : 0;
+      if (aHasNodes !== bHasNodes) return bHasNodes - aHasNodes;
+      return a.pricePerHour - b.pricePerHour;
+    });
+    return eligible;
   }
 
   /**
-   * Deploy a media service (ComfyUI, Wan 2.2, TTS, A1111) on Nosana GPU.
+   * Deploy a media service (ComfyUI, TTS, A1111) on Nosana GPU.
    * Reuses an existing running deployment if available.
    *
    * Market selection: tries `preferredMarket` (by name) first, then falls back
@@ -656,8 +670,13 @@ export class NosanaManager {
 
     // Build ordered market candidate list: preferred first, then VRAM-eligible by price
     const marketCandidates: GpuMarket[] = [];
+    // Force-refresh market data before deployment to get latest node availability
+    await this.getMarkets(true);
     const preferred = await this.findMarket(config.preferredMarket);
     if (preferred) {
+      if (preferred.nodesAvailable !== undefined && preferred.nodesAvailable === 0) {
+        console.log(`[AgentForge:Manager] Preferred market "${preferred.name}" has 0 nodes — will try but may queue`);
+      }
       marketCandidates.push(preferred);
     } else {
       console.warn(`[AgentForge:Manager] Preferred market "${config.preferredMarket}" not found, using VRAM fallback only`);
@@ -683,10 +702,24 @@ export class NosanaManager {
       );
     }
 
+    // Sort candidates: markets with available nodes first, then empty ones
+    marketCandidates.sort((a, b) => {
+      const aHasNodes = a.nodesAvailable === undefined || a.nodesAvailable > 0 ? 1 : 0;
+      const bHasNodes = b.nodesAvailable === undefined || b.nodesAvailable > 0 ? 1 : 0;
+      if (aHasNodes !== bHasNodes) return bHasNodes - aHasNodes; // nodes first
+      return a.pricePerHour - b.pricePerHour; // then by price
+    });
+
+    // Log skipped empty markets
+    const emptyMarkets = marketCandidates.filter(m => m.nodesAvailable !== undefined && m.nodesAvailable === 0);
+    if (emptyMarkets.length > 0) {
+      console.log(`[AgentForge:Manager] Skipping empty markets for ${config.name}: ${emptyMarkets.map(m => `${m.name} (0 nodes)`).join(', ')}`);
+    }
+
     const safeName = `media-${serviceKey}`.replace(/[^a-z0-9-]/g, '-').slice(0, 50);
     const triedAddresses: string[] = [];
     const MAX_ATTEMPTS = 3;
-    const QUEUE_FALLBACK_MS = 120_000;
+    const QUEUE_FALLBACK_MS = 30_000; // 30s — pre-checked availability, queue means race condition
 
     for (let attempt = 0; attempt < Math.min(marketCandidates.length, MAX_ATTEMPTS); attempt++) {
       const market = marketCandidates.find(m => !triedAddresses.includes(m.address));

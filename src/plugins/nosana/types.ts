@@ -113,10 +113,10 @@ export const AGENT_TEMPLATES: Record<string, {
     market: 'nvidia-3090',
   },
   'video-generator': {
-    name: 'Video Generator',
+    name: 'Slideshow Video',
     plugins: [],
-    defaultPrompt: 'Generate a video based on the description provided.',
-    market: 'nvidia-4090',
+    defaultPrompt: 'Generate a slideshow video from scene images with narrated audio.',
+    market: 'cpu-only',
   },
   'narrator': {
     name: 'Narrator',

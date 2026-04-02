@@ -1,4 +1,4 @@
-// ComfyUI client for Stable Diffusion images and Wan 2.2 video on Nosana GPU
+// ComfyUI client for Stable Diffusion image generation on Nosana GPU
 
 export class ComfyUIClient {
   private baseUrl: string;
@@ -158,74 +158,4 @@ export class ComfyUIClient {
     throw new Error('ComfyUI image generation timed out (120s)');
   }
 
-  /**
-   * Generate a video using Wan 2.2 via ComfyUI API.
-   * NOTE: The exact workflow JSON depends on the Nosana template's installed nodes.
-   * Users should export workflow_api.json from the ComfyUI UI after deploying.
-   * @returns URL to view the generated video and filename
-   */
-  async generateVideo(
-    prompt: string,
-    durationSeconds: number = 4,
-  ): Promise<{ url: string; filename: string }> {
-    // Clamp duration to prevent GPU abuse (max 30 seconds)
-    durationSeconds = Math.max(1, Math.min(30, durationSeconds));
-    const workflow: Record<string, any> = {
-      '1': {
-        class_type: 'WanT2V',
-        inputs: {
-          prompt,
-          negative_prompt: 'blurry, distorted, low quality',
-          width: 832,
-          height: 480,
-          num_frames: durationSeconds * 16,
-          seed: Math.floor(Math.random() * 1_000_000_000),
-        },
-      },
-      '2': {
-        class_type: 'SaveVideo',
-        inputs: { filename_prefix: 'agentforge_video', video: ['1', 0] },
-      },
-    };
-
-    const queueRes = await fetch(`${this.baseUrl}/prompt`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: workflow }),
-      signal: AbortSignal.timeout(30_000),
-    });
-    if (!queueRes.ok) throw new Error(`ComfyUI video queue failed: ${queueRes.status}`);
-    const { prompt_id } = (await queueRes.json()) as any;
-
-    // Poll for completion (max 300s — video generation takes longer)
-    const start = Date.now();
-    while (Date.now() - start < 300_000) {
-      await new Promise(r => setTimeout(r, 5000));
-      const histRes = await fetch(`${this.baseUrl}/history/${prompt_id}`, {
-        signal: AbortSignal.timeout(10_000),
-      });
-      if (!histRes.ok) continue;
-      const history = (await histRes.json()) as any;
-      const result = history[prompt_id];
-      if (!result) continue;
-
-      if (result.status?.status_str === 'error') {
-        const errMsg = result.status?.messages?.map((m: any) => m[1]?.exception_message).filter(Boolean).join('; ') || 'unknown error';
-        throw new Error(`ComfyUI video execution failed: ${errMsg}`);
-      }
-
-      if (!result.outputs) continue;
-
-      for (const nodeId of Object.keys(result.outputs)) {
-        const output = result.outputs[nodeId];
-        const videos = output.gifs || output.videos || [];
-        if (videos.length > 0) {
-          const vid = videos[0];
-          const url = `${this.baseUrl}/view?filename=${encodeURIComponent(vid.filename)}&subfolder=${encodeURIComponent(vid.subfolder || '')}&type=${encodeURIComponent(vid.type || 'output')}`;
-          return { url, filename: vid.filename };
-        }
-      }
-    }
-    throw new Error('ComfyUI video generation timed out (300s)');
-  }
 }
