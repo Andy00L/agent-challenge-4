@@ -1723,7 +1723,7 @@ Respond with ONLY the JSON array:`,
 
       if (template === 'image-generator') {
         if (!capabilities.imageGen) {
-          narrate(`\u{26A0}\u{FE0F} **Image generation not available.** Skipping "${node.step.name}". Configure COMFYUI_ENDPOINT, A1111_ENDPOINT, or FAL_KEY in .env to enable.`);
+          narrate(`\u{26A0}\u{FE0F} **Image generation not available.** Skipping "${node.step.name}". Configure COMFYUI_ENDPOINT or FAL_KEY in .env to enable.`);
           node.status = 'skipped';
           node.output = '[Image generation not configured — step skipped]';
           node.outputType = 'text';
@@ -1834,19 +1834,19 @@ Respond with ONLY the JSON array:`,
           const scenesToGenerate = scenesNeedingImages.slice(0, 6);
 
           if (sd15Url && !sd15Failed) {
-            // SD 1.5 mode: sequential on warm container (~2s per image)
-            const { A1111Client: A1111 } = await import('./a1111Client.js');
+            // SD 1.5 mode: sequential on warm ComfyUI container (~3-5s per image)
+            const { ComfyUIClient } = await import('./comfyuiClient.js');
             for (const scene of scenesToGenerate) {
               const prompt = scene.imagePrompt || scene.narration || `Scene ${scene.sceneNumber}`;
               try {
-                narrate(`\u{1F3A8} Scene ${scene.sceneNumber}: generating with SD 1.5...`);
-                const client = new A1111(sd15Url);
+                narrate(`\u{1F3A8} Scene ${scene.sceneNumber}: generating with ComfyUI SD 1.5...`);
+                const client = new ComfyUIClient(sd15Url);
                 const result = await client.generateImage(prompt, '', 512, 512);
                 const imagePath = await assembler.downloadMedia(`data:image/png;base64,${result.base64}`, `scene-${scene.sceneNumber}.png`);
                 sceneMedias.push({ sceneNumber: scene.sceneNumber, imagePath, durationSeconds: scene.durationSeconds, title: scene.title });
-                log(`Scene ${scene.sceneNumber} generated via SD 1.5`);
+                log(`Scene ${scene.sceneNumber} generated via ComfyUI SD 1.5`);
               } catch (sdErr: any) {
-                log(`SD 1.5 generation failed for scene ${scene.sceneNumber}: ${sdErr.message} — switching to DALL-E for remaining`);
+                log(`ComfyUI SD 1.5 generation failed for scene ${scene.sceneNumber}: ${sdErr.message} — switching to DALL-E for remaining`);
                 sd15Failed = true;
                 markNosanaImageFailed();
                 break; // Switch to parallel DALL-E for remaining scenes

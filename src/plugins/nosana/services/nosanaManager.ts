@@ -664,7 +664,7 @@ export class NosanaManager {
   }
 
   /**
-   * Deploy a media service (ComfyUI, TTS, A1111) on Nosana GPU.
+   * Deploy a media service (ComfyUI, TTS) on Nosana GPU.
    * Reuses an existing running deployment if available.
    *
    * Market selection: tries `preferredMarket` (by name) first, then falls back

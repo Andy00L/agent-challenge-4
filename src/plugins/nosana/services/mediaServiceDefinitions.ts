@@ -13,10 +13,10 @@ export interface MediaServiceConfig {
 
 export const MEDIA_SERVICES: Record<string, MediaServiceConfig> = {
 
-  'a1111-sd15': {
-    name: 'AUTOMATIC1111 (SD 1.5)',
-    port: 7860,
-    healthCheckPath: '/sdapi/v1/sd-models',
+  'comfyui-sd15': {
+    name: 'ComfyUI (SD 1.5)',
+    port: 8188,
+    healthCheckPath: '/system_stats',
     minVramGB: 4,
     preferredMarket: 'NVIDIA 3060',
     bootTimeoutMs: 600_000, // 10 min — SD 1.5 model download from S3 (4GB) takes 3-6 min on Nosana nodes
@@ -26,16 +26,15 @@ export const MEDIA_SERVICES: Record<string, MediaServiceConfig> = {
       meta: { trigger: 'api' },
       ops: [{
         type: 'container/run',
-        id: 'a1111-sd15',
+        id: 'comfyui-sd15',
         args: {
-          cmd: ['python', '-u', 'launch.py', '--listen', '--port', '7860', '--api'],
           gpu: true,
-          image: 'docker.io/nosana/automatic1111:0.0.1',
-          expose: 7860,
+          image: 'docker.io/nosana/comfyui:2.0.5',
+          expose: 8188,
           resources: [{
             url: 'https://models.nosana.io/stable-diffusion/1.5',
             type: 'S3',
-            target: '/stable-diffusion-webui/models/Stable-diffusion',
+            target: '/comfyui/models/checkpoints',
           }],
         },
       }],
@@ -67,5 +66,5 @@ export const MEDIA_SERVICES: Record<string, MediaServiceConfig> = {
   },
 };
 
-export const IMAGE_SERVICE = 'a1111-sd15';
+export const IMAGE_SERVICE = 'comfyui-sd15';
 export const TTS_SERVICE = 'tts-coqui';

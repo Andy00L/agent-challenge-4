@@ -3,9 +3,9 @@
 //
 // Graceful degradation: returns null if all backends fail (caller handles text fallback).
 
-import { A1111Client } from './a1111Client.js';
+import { ComfyUIClient } from './comfyuiClient.js';
 
-export type ImageGenBackend = 'nosana-sd15' | 'openai-dalle' | 'fal' | 'a1111' | 'comfyui' | 'none';
+export type ImageGenBackend = 'nosana-sd15' | 'openai-dalle' | 'fal' | 'comfyui' | 'none';
 
 // ── Shared SD 1.5 container state ───────────────────────
 // Persists across calls within a mission. VideoAssembler boots SD 1.5 once
@@ -118,8 +118,7 @@ export class ImageGenRouter {
     const openaiUrl = process.env.OPENAI_API_URL || '';
     if (openaiKey && openaiUrl.includes('openai.com')) return 'openai-dalle';
     if (process.env.FAL_KEY) return 'fal';
-    if (process.env.A1111_ENDPOINT) return 'a1111';
-    if (process.env.COMFYUI_ENDPOINT) return 'comfyui';
+    if (process.env.COMFYUI_ENDPOINT || process.env.A1111_ENDPOINT) return 'comfyui';
     return 'none';
   }
 
@@ -139,33 +138,33 @@ export class ImageGenRouter {
     const openaiKey = process.env.OPENAI_API_KEY;
     const openaiUrl = process.env.OPENAI_API_URL || '';
 
-    // Backend 1a: Warm SD 1.5 container (already booted by VideoAssembler)
+    // Backend 1a: Warm ComfyUI SD 1.5 container (already booted by VideoAssembler)
     if (_nosanaImageServiceUrl && !shouldSkipNosana()) {
       try {
-        console.log('[AgentForge:ImageGen] Using warm SD 1.5 container');
-        const client = new A1111Client(_nosanaImageServiceUrl);
+        console.log('[AgentForge:ImageGen] Using warm ComfyUI SD 1.5 container');
+        const client = new ComfyUIClient(_nosanaImageServiceUrl);
         const result = await client.generateImage(prompt, '', width, height);
         return { base64: result.base64 };
       } catch (err: any) {
-        console.warn(`[AgentForge:ImageGen] Warm SD 1.5 failed: ${err.message} — marking failed`);
+        console.warn(`[AgentForge:ImageGen] Warm ComfyUI SD 1.5 failed: ${err.message} — marking failed`);
         markNosanaImageFailed();
       }
     }
 
-    // Backend 1b: Fresh SD 1.5 deploy (only if not recently failed)
+    // Backend 1b: Fresh ComfyUI SD 1.5 deploy (only if not recently failed)
     if (!shouldSkipNosana() && process.env.NOSANA_API_KEY && process.env.NOSANA_API_KEY !== 'YOUR_NOSANA_API_KEY') {
       try {
-        console.log('[AgentForge:ImageGen] Trying fresh SD 1.5 on Nosana GPU...');
+        console.log('[AgentForge:ImageGen] Trying fresh ComfyUI SD 1.5 on Nosana GPU...');
         const { getNosanaManager } = await import('./nosanaManager.js');
         const { IMAGE_SERVICE } = await import('./mediaServiceDefinitions.js');
         const manager = getNosanaManager();
         const serviceUrl = await manager.deployMediaService(IMAGE_SERVICE);
         setNosanaImageService(serviceUrl); // Share with future calls
-        const client = new A1111Client(serviceUrl);
+        const client = new ComfyUIClient(serviceUrl);
         const result = await client.generateImage(prompt, '', width, height);
         return { base64: result.base64 };
       } catch (err: any) {
-        console.warn(`[AgentForge:ImageGen] SD 1.5 Nosana failed: ${err.message}, trying next`);
+        console.warn(`[AgentForge:ImageGen] ComfyUI SD 1.5 Nosana failed: ${err.message}, trying next`);
         markNosanaImageFailed();
       }
     }
@@ -207,24 +206,12 @@ export class ImageGenRouter {
       }
     }
 
-    // Backend 4: Manual A1111 endpoint
-    if (process.env.A1111_ENDPOINT) {
+    // Backend 4: Manual ComfyUI endpoint (also accepts legacy A1111_ENDPOINT)
+    const manualEndpoint = process.env.COMFYUI_ENDPOINT || process.env.A1111_ENDPOINT;
+    if (manualEndpoint) {
       try {
-        console.log('[AgentForge:ImageGen] Trying manual A1111 endpoint...');
-        const client = new A1111Client(process.env.A1111_ENDPOINT);
-        const result = await client.generateImage(prompt, '', width, height);
-        return { base64: result.base64 };
-      } catch (err: any) {
-        console.warn(`[AgentForge:ImageGen] Manual A1111 failed: ${err.message}, trying next`);
-      }
-    }
-
-    // Backend 5: Manual ComfyUI endpoint
-    if (process.env.COMFYUI_ENDPOINT) {
-      try {
-        console.log('[AgentForge:ImageGen] Trying manual ComfyUI endpoint...');
-        const { ComfyUIClient } = await import('./comfyuiClient.js');
-        const client = new ComfyUIClient(process.env.COMFYUI_ENDPOINT);
+        console.log(`[AgentForge:ImageGen] Trying manual ComfyUI endpoint: ${manualEndpoint}`);
+        const client = new ComfyUIClient(manualEndpoint);
         const result = await client.generateImage(prompt, '', width, height);
         return { base64: result.base64 };
       } catch (err: any) {
