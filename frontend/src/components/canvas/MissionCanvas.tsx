@@ -146,19 +146,19 @@ function StatusBar({ status, startedAt, completedAt, steps, onNewMission, hasMan
         )}
 
         {/* Timer */}
-        <span className="text-muted-foreground cost-counter whitespace-nowrap shrink-0">{timeStr}</span>
+        <span className="text-muted-foreground cost-counter whitespace-nowrap shrink-0 px-2 py-0.5 bg-muted rounded-full text-[11px]">{timeStr}</span>
 
         {/* Live cost */}
         {totalCostPerHr > 0 && (
-          <Badge variant="outline" className="cost-counter whitespace-nowrap shrink-0 font-semibold">
-            ${activeCost.toFixed(4)} {status === 'complete' ? 'total' : 'spent'}
-          </Badge>
+          <span className="cost-counter whitespace-nowrap shrink-0 px-2 py-0.5 bg-muted rounded-full text-[11px] text-muted-foreground">
+            ${activeCost.toFixed(4)}
+          </span>
         )}
 
         {/* Active agents count */}
         {activeAgentCount > 0 && status !== 'complete' && status !== 'error' && (
-          <span className="text-muted-foreground whitespace-nowrap shrink-0">
-            {activeAgentCount} agent{activeAgentCount > 1 ? 's' : ''} on Nosana
+          <span className="whitespace-nowrap shrink-0 px-2 py-0.5 bg-muted rounded-full text-[11px] text-muted-foreground">
+            {activeAgentCount} agent{activeAgentCount > 1 ? 's' : ''}
           </span>
         )}
       </div>
@@ -367,6 +367,8 @@ function MissionCanvasInner() {
           queuedSince: step.queuedSince,
           outputType: step.outputType,
           outputUrls: step.outputUrls,
+          imageCount: (step as any).imageCount,
+          totalImages: (step as any).totalImages,
         },
       });
 
@@ -555,7 +557,12 @@ function MissionCanvasInner() {
             minZoom={0.3}
             maxZoom={1.5}
           >
-            <Background variant={BackgroundVariant.Dots} color="#C5C0B8" gap={20} size={1.5} />
+            <Background
+              variant={BackgroundVariant.Dots}
+              color={status === 'complete' ? '#8aba8a' : status === 'executing' || status === 'deploying' ? '#b0aaaa' : '#C5C0B8'}
+              gap={status === 'executing' || status === 'deploying' ? 16 : 24}
+              size={status === 'executing' || status === 'deploying' ? 1.5 : 1}
+            />
             <Controls position="bottom-left" />
           </ReactFlow>
 

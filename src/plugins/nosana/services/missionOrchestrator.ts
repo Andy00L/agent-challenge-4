@@ -1477,6 +1477,8 @@ Respond with ONLY the JSON array:`,
             parallelCount: info?.parallelCount,
             outputType: n.outputType,
             outputUrls: n.outputUrls,
+            imageCount: (n as any)._imageCount,
+            totalImages: (n as any)._totalImages,
           };
         }),
       };
@@ -1864,6 +1866,9 @@ Respond with ONLY the JSON array:`,
           }
 
           const scenesToGenerate = scenesNeedingImages.slice(0, 6);
+          (node as any)._totalImages = scenesToGenerate.length;
+          (node as any)._imageCount = 0;
+          syncState();
 
           if (sd15Url && !sd15Failed) {
             // SD 1.5 mode: sequential on warm ComfyUI container (~3-5s per image)
@@ -1876,6 +1881,8 @@ Respond with ONLY the JSON array:`,
                 const result = await client.generateImage(prompt, '', 512, 512);
                 const imagePath = await assembler.downloadMedia(`data:image/png;base64,${result.base64}`, `scene-${scene.sceneNumber}.png`);
                 sceneMedias.push({ sceneNumber: scene.sceneNumber, imagePath, durationSeconds: scene.durationSeconds, title: scene.title });
+                (node as any)._imageCount = sceneMedias.length;
+                syncState();
                 log(`Scene ${scene.sceneNumber} generated via ComfyUI SD 1.5`);
               } catch (sdErr: any) {
                 log(`ComfyUI SD 1.5 generation failed for scene ${scene.sceneNumber}: ${sdErr.message} — switching to DALL-E for remaining`);

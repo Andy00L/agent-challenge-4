@@ -145,16 +145,35 @@ export function OutputPanel({ output, onClose, onNewMission, steps, warnings, st
       {/* Actions */}
       <Separator />
       <div className="px-6 py-4 space-y-2.5">
-        <div className="grid grid-cols-2 gap-2.5">
-          <Button variant="outline" size="sm" className="hover:shadow-xs transition-all duration-150" onClick={handleCopy}>
-            {copied ? <Check className="w-3 h-3 text-green-600" /> : <Copy className="w-3 h-3" />}
-            {copied ? 'Copied' : 'Copy'}
-          </Button>
-          <Button variant="outline" size="sm" className="hover:shadow-xs transition-all duration-150" onClick={handleDownload}>
-            <Download className="w-3 h-3" />
-            Download .md
-          </Button>
-        </div>
+        {(() => {
+          const media = detectMediaInOutput(output);
+          const stepAudioUrls = steps.filter(s => s.outputType === 'audio' && s.outputUrls?.length).flatMap(s => s.outputUrls!);
+          const stepVideoUrls = steps.filter(s => s.outputType === 'video' && s.outputUrls?.length).flatMap(s => s.outputUrls!);
+          const allVideoUrls = [...new Set([...media.videoUrls, ...stepVideoUrls])];
+          const allAudioUrls = [...new Set([...media.audioUrls, ...stepAudioUrls])];
+          return (
+            <div className="grid grid-cols-2 gap-2">
+              {allVideoUrls.map((url, i) => (
+                <a key={`dl-v-${i}`} href={url} download className="flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs text-foreground/70 hover:bg-muted transition-colors">
+                  <Download className="w-3 h-3" /> Video
+                </a>
+              ))}
+              {allAudioUrls.map((url, i) => (
+                <a key={`dl-a-${i}`} href={url} download className="flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs text-foreground/70 hover:bg-muted transition-colors">
+                  <Download className="w-3 h-3" /> Audio
+                </a>
+              ))}
+              <Button variant="outline" size="sm" className="hover:shadow-xs transition-all duration-150" onClick={handleCopy}>
+                {copied ? <Check className="w-3 h-3 text-green-600" /> : <Copy className="w-3 h-3" />}
+                {copied ? 'Copied' : 'Copy Text'}
+              </Button>
+              <Button variant="outline" size="sm" className="hover:shadow-xs transition-all duration-150" onClick={handleDownload}>
+                <Download className="w-3 h-3" />
+                Script .md
+              </Button>
+            </div>
+          );
+        })()}
         <Button className="w-full shadow-sm hover:shadow-md hover:-translate-y-px active:translate-y-0 transition-all duration-200" onClick={onNewMission}>
           Start New Mission
         </Button>

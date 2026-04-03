@@ -120,8 +120,18 @@ export function NodeOutputPanel({ step, onClose }: Props) {
 
       {/* Footer */}
       <Separator />
-      <div className="px-5 py-4">
-        <div className="grid grid-cols-2 gap-2.5">
+      <div className="px-5 py-4 space-y-2">
+        {step.outputUrls && step.outputUrls.length > 0 && (
+          <div className="grid grid-cols-2 gap-2">
+            {step.outputUrls.map((url, i) => (
+              <a key={`dl-${i}`} href={url} download className="flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs text-foreground/70 hover:bg-muted transition-colors">
+                <Download className="w-3 h-3" />
+                {step.outputType === 'video' ? 'Video' : step.outputType === 'audio' ? 'Audio' : step.outputType === 'image' ? 'Image' : 'File'}
+              </a>
+            ))}
+          </div>
+        )}
+        <div className="grid grid-cols-2 gap-2">
           <Button variant="outline" size="sm" className="hover:shadow-xs transition-all duration-150" onClick={handleCopy}>
             {copied ? <Check className="w-3 h-3 text-green-600" /> : <Copy className="w-3 h-3" />}
             {copied ? 'Copied' : 'Copy'}
