@@ -6,7 +6,7 @@
 
 ![NosanaXEliza](./assets/NosanaXEliza.jpg)
 
-An ElizaOS v2 plugin that turns natural language missions into multi-agent DAG pipelines running on Nosana's decentralized GPU network. Type "create a 30s video about ants" and it deploys 5 agents across separate GPU nodes, boots ComfyUI for image generation, generates TTS narration, and assembles a slideshow video. Or type "compare CrewAI vs AutoGen vs ElizaOS" and it runs 3 researchers in parallel, merges results through an analyst, and shows everything live on a ReactFlow canvas.
+An ElizaOS v2 plugin that turns natural language missions into multi-agent DAG pipelines running on Nosana's decentralized GPU network. Type "create a 30s video about ants" and it deploys 5 agents across separate GPU nodes, boots ComfyUI for image generation, generates TTS narration, and assembles a slideshow video. Type "compare CrewAI vs AutoGen vs ElizaOS" and it runs 3 researchers in parallel, merges results through an analyst, and shows everything live on a ReactFlow canvas.
 
 ## Quick Start
 
@@ -51,7 +51,7 @@ nosana job create nos_job_def/nosana_eliza_job_definition.json --market <market-
 
 The frontend is a split-panel app: chat on the left (Socket.IO), ReactFlow canvas or fleet dashboard on the right. The canvas updates every 2 seconds with node status, parallel execution indicators, and click-to-view output panels. Fleet dashboard shows live GPU market pricing, credit balance, and per-agent cost tracking.
 
-9 agent templates (researcher, writer, analyst, monitor, publisher, scene-writer, image-generator, video-generator, narrator) with automatic template selection from natural language. Multimodal pipeline: ComfyUI SD 1.5 for images, OpenAI/ElevenLabs/fal.ai/Coqui for TTS, FFmpeg slideshow assembly for video. Researchers get Tavily web search with a 90-second enrichment window. Workers run as Docker containers on Nosana GPU nodes via `@nosana/kit` SDK.
+9 agent templates (researcher, writer, analyst, monitor, publisher, scene-writer, image-generator, video-generator, narrator) with automatic template selection from natural language. Multimodal pipeline: ComfyUI SD 1.5 for images, ElevenLabs/OpenAI/fal.ai/Coqui for TTS, FFmpeg slideshow assembly for video. Researchers get Tavily web search with a 90-second enrichment window. Workers run as Docker containers on Nosana GPU nodes via `@nosana/kit` SDK.
 
 ## How It Works
 
@@ -127,7 +127,7 @@ sequenceDiagram
     ElizaOS->>Orch: EXECUTE_MISSION handler
     Note over Orch: Stop orphan agents from previous runs
     Note over Orch: Plan DAG via LLM or regex fallback
-    Orch-->>Chat: Narrate pipeline plan
+    Orch-->>Chat: Progress via Fleet Socket.IO
     loop Each depth level
         Orch->>Nosana: Deploy agents for this level
         Nosana->>GPU: Boot Docker container
@@ -135,10 +135,10 @@ sequenceDiagram
         GPU-->>Orch: Agent ready
         Orch->>GPU: POST task via WorkerClient
         GPU-->>Orch: Task result
-        Orch-->>Chat: Narrate completion
+        Orch-->>Chat: Progress via Fleet Socket.IO
     end
     Note over Orch: Combine leaf node outputs
-    Orch-->>Chat: Final mission output
+    Orch-->>Chat: Final result via ElizaOS callback
     Note over Orch: Auto-stop all agents
     Canvas-->>User: Live node updates via 2s polling
 ```
@@ -153,13 +153,15 @@ sequenceDiagram
 
 **Smart Market Distribution.** Each deployment independently selects its own market via `selectAndClaim()` (atomic lock). Deploys spread across markets based on effective idle nodes (blockchain idle minus already-claimed). If a worker times out (150s), it retries on up to 3 different markets before giving up.
 
-**Multimodal Media Pipeline.** Video missions pre-boot ComfyUI (`docker.io/nosana/comfyui:2.0.5`) at T=0 alongside workers. Image generation falls back through: ComfyUI SD 1.5 on Nosana, DALL-E 3, fal.ai Flux, manual endpoint. TTS falls back through: OpenAI, ElevenLabs (with word-level timestamps), fal.ai PlayAI, Coqui on Nosana GPU.
+**Multimodal Media Pipeline.** Video missions pre-boot ComfyUI (`docker.io/nosana/comfyui:2.0.5`) at T=0 alongside workers. Image generation falls back through: ComfyUI SD 1.5 on Nosana, DALL-E 3, fal.ai Flux, manual endpoint. TTS falls back through: ElevenLabs (with word-level timestamps), OpenAI, fal.ai PlayAI, Coqui on Nosana GPU.
 
 **Web Search Enrichment.** Researcher agents use Tavily via `plugin-web-search`. After the initial response, `WorkerClient` polls for up to 90 seconds waiting for a web-enriched follow-up (the REPLY, WEB_SEARCH, REPLY pattern). Takes the longest response found.
 
 **Pipeline Error Handling.** If a critical dependency fails (e.g. ScriptWriter can't boot), all downstream steps are automatically skipped instead of producing garbage output. The mission reports partial completion with succeeded/failed/skipped counts.
 
 **Cost Tracking.** Live cost counter in the header and fleet dashboard. Per-agent cost/hr, total spent, and Nosana credit balance. GPU market cards show idle node counts from blockchain data (green = idle, yellow = busy, gray = queued).
+
+**Dual Socket.IO Messaging.** Two Socket.IO channels serve different purposes. ElizaOS Socket.IO (port 3000) handles user chat and bookend messages that persist to conversation history. Fleet API Socket.IO (port 3001) handles ephemeral mission progress updates, bypassing ElizaOS database inserts. The frontend connects to both and merges messages into one chat stream.
 
 ## Media Pipeline
 
@@ -173,7 +175,7 @@ flowchart LR
         I3 -->|fail| I4[Manual endpoint]
     end
     subgraph Text-to-Speech
-        T1[OpenAI TTS] -->|fail| T2[ElevenLabs]
+        T1[ElevenLabs] -->|fail| T2[OpenAI TTS]
         T2 -->|fail| T3[fal.ai PlayAI]
         T3 -->|fail| T4[Coqui on Nosana GPU]
     end
@@ -220,12 +222,12 @@ flowchart TD
 |-----------|-------|---------|
 | `name` | - | `plugin-nosana` |
 | `description` | - | Nosana decentralized GPU network integration |
-| `init` | - | API key setup, market discovery, Fleet API server on port 3001 |
+| `init` | - | API key setup, market discovery, Fleet API server on port 3001, Socket.IO server |
 | `actions` | 6 | EXECUTE_MISSION, CREATE_AGENT_FROM_TEMPLATE, DEPLOY_AGENT, CHECK_FLEET_STATUS, SCALE_REPLICAS, STOP_DEPLOYMENT |
 | `providers` | 1 | `nosana-fleet-status` (injects fleet state into agent context) |
 | `evaluators` | 1 | `MISSION_QUALITY` (scores outputs on 5 criteria: length, structure, sources, actionability, formatting) |
 | `events` | 3 | MESSAGE_RECEIVED, ACTION_STARTED, ACTION_COMPLETED (tracks action duration metrics) |
-| `routes` | 2 | `GET /fleet`, `GET /fleet/:id` |
+| `routes` | 2 | `GET /fleet`, `GET /fleet/:id` (ElizaOS plugin routes) |
 | `tests` | 5 | GPU markets, agent templates, actions, provider, evaluator+events |
 
 ## Agent Templates
@@ -238,13 +240,13 @@ flowchart TD
 | `monitor` | Monitoring Agent | web-search, bootstrap, openai | nvidia-3090 | Periodic source monitoring |
 | `publisher` | Social Publisher | bootstrap, openai | cpu-only | Social media publishing |
 | `scene-writer` | Scene Writer | bootstrap, openai | cpu-only | Break content into visual scenes with image prompts |
-| `image-generator` | Image Generator | bootstrap, openai | nvidia-3090 | Generate images (ComfyUI/DALL-E/fal.ai) |
-| `video-generator` | Slideshow Video | bootstrap, openai | cpu-only | Assemble slideshow from scenes + narration |
-| `narrator` | Narrator | bootstrap, openai | nvidia-3090 | Convert text to speech audio |
+| `image-generator` | Image Generator | (none) | nvidia-3090 | Generate images (ComfyUI/DALL-E/fal.ai) |
+| `video-generator` | Slideshow Video | (none) | cpu-only | Assemble slideshow from scenes + narration |
+| `narrator` | Narrator | (none) | nvidia-3090 | Convert text to speech audio |
 
 ## REST API
 
-Fleet API server runs on port 3001 (default `127.0.0.1`, configurable via `FLEET_API_HOST`). Authenticated via `x-api-token` header (auto-generated or set via `FLEET_API_TOKEN`). Media endpoints are unauthenticated. 15 endpoints:
+Fleet API server runs on port 3001 (default `127.0.0.1`, configurable via `FLEET_API_HOST`). Authenticated via `x-api-token` header (auto-generated or set via `FLEET_API_TOKEN`). Media endpoints are unauthenticated. 16 endpoints:
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
@@ -263,6 +265,7 @@ Fleet API server runs on port 3001 (default `127.0.0.1`, configurable via `FLEET
 | GET | `/fleet/mission/export` | yes | Export pipeline as JSON |
 | GET | `/fleet/media/:id` | no | Serve generated media (images, video, audio) |
 | GET | `/fleet/metrics` | yes | Action execution metrics |
+| GET | `/fleet/api-docs` | yes | API endpoint documentation |
 
 ## Tech Stack
 
@@ -287,8 +290,8 @@ Fleet API server runs on port 3001 (default `127.0.0.1`, configurable via `FLEET
 src/
   index.ts                                    # ElizaOS Project entry point
   plugins/nosana/
-    index.ts                                  # Plugin definition, routes, Fleet API server
-    types.ts                                  # Interfaces, GPU market fallbacks, agent templates
+    index.ts                                  # Plugin definition, routes, Fleet API + Socket.IO server
+    types.ts                                  # Interfaces, GPU market fallbacks, 9 agent templates
     actions/
       executeMission.ts                       # Multi-agent DAG pipeline execution
       createAgentFromTemplate.ts              # Template-based agent creation
@@ -302,10 +305,10 @@ src/
       workerClient.ts                         # HTTP communication with deployed agents
       imageGenRouter.ts                       # Image gen fallback chain: ComfyUI, DALL-E, fal.ai
       comfyuiClient.ts                        # ComfyUI API client (queue, poll, download)
-      ttsClient.ts                            # TTS fallback chain: OpenAI, ElevenLabs, fal.ai, Coqui
+      ttsClient.ts                            # TTS fallback chain: ElevenLabs, OpenAI, fal.ai, Coqui
       mediaAssembler.ts                       # FFmpeg slideshow assembly (images + audio = MP4)
       mediaServiceDefinitions.ts              # Docker job specs for ComfyUI + Coqui TTS
-      videoGenRouter.ts                       # Video generation routing
+      videoGenRouter.ts                       # Video generation routing (stub)
     providers/
       fleetStatusProvider.ts                  # Injects fleet state into agent context
     evaluators/
@@ -332,9 +335,11 @@ frontend/src/
     fleetStore.ts                             # Fleet state, markets, credits (Zustand)
     missionStore.ts                           # Pipeline state (Zustand)
   lib/
-    elizaClient.ts                            # Socket.IO client, agent discovery
+    elizaClient.ts                            # Dual Socket.IO client, agent discovery
     fleetPoller.ts                            # Fleet/credits/markets polling (5s/30s/60s)
     missionPoller.ts                          # Pipeline state polling (2s)
+    fleetFetch.ts                             # Authenticated fetch wrapper for Fleet API
+    mediaDetector.ts                          # Detect images/video/audio URLs in output
     markdown.ts                               # Markdown-to-HTML renderer with sanitization
     utils.ts                                  # Tailwind class merge utility
 
@@ -351,10 +356,11 @@ worker/src/
 | `OPENAI_API_URL` | Yes | empty | LLM inference base URL (Nosana or Ollama) |
 | `MODEL_NAME` | Yes | `Qwen3.5-27B-AWQ-4bit` | LLM model name |
 | `TAVILY_API_KEY` | For web search | empty | Tavily API key for researcher agents |
-| `ELEVENLABS_API_KEY` | No | empty | ElevenLabs TTS (priority 2 after OpenAI) |
+| `ELEVENLABS_API_KEY` | No | empty | ElevenLabs TTS (priority 1) |
 | `FAL_API_KEY` | No | empty | fal.ai PlayAI TTS (priority 3) |
 | `FAL_KEY` | No | empty | fal.ai Flux image generation |
 | `COMFYUI_ENDPOINT` | No | empty | Manual ComfyUI endpoint URL |
+| `A1111_ENDPOINT` | No | empty | Manual Automatic1111 endpoint URL |
 | `AGENTFORGE_WORKER_IMAGE` | No | `drewdockerus/agentforge-worker:latest` | Docker image for worker agents |
 | `FLEET_API_PORT` | No | `3001` | Fleet API port |
 | `FLEET_API_HOST` | No | `127.0.0.1` | Fleet API bind address |
@@ -374,3 +380,7 @@ Built for the [Nosana x ElizaOS Builder Challenge](https://nosana.com).
 - **Docker Hub:** [`drewdockerus/agent-challenge:latest`](https://hub.docker.com/r/drewdockerus/agent-challenge), [`drewdockerus/agentforge-worker:latest`](https://hub.docker.com/r/drewdockerus/agentforge-worker)
 - **Nosana Job Definition:** `nos_job_def/nosana_eliza_job_definition.json`
 - **Stack:** ElizaOS v2 + Nosana GPU Network (@nosana/kit ^2.2.4) + React 19 + ReactFlow + Zustand + Tailwind 4 + shadcn/ui
+
+## License
+
+MIT. See [LICENSE](./LICENSE).

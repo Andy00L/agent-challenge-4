@@ -63,6 +63,7 @@ export async function getOrCreateDmChannel(agentId: string): Promise<string> {
 // ── Socket.IO ────────────────────────────────────────
 
 let socket: Socket | null = null;
+let fleetSocket: Socket | null = null;
 let messageListeners: Array<(msg: ChannelMessage) => void> = [];
 
 export function onAgentMessage(cb: (msg: ChannelMessage) => void): () => void {
@@ -70,6 +71,20 @@ export function onAgentMessage(cb: (msg: ChannelMessage) => void): () => void {
   return () => {
     messageListeners = messageListeners.filter((l) => l !== cb);
   };
+}
+
+/** Broadcast a messageBroadcast payload to all registered listeners */
+function dispatchMessage(data: any) {
+  if (data.senderId === userId) return;
+  const msg: ChannelMessage = {
+    id: data.id || data.messageId || crypto.randomUUID(),
+    channelId: data.channelId ?? '',
+    authorId: data.senderId ?? '',
+    content: data.text ?? data.message ?? data.content ?? '',
+    createdAt: new Date(data.createdAt ?? Date.now()).toISOString(),
+    metadata: data.metadata,
+  };
+  for (const cb of messageListeners) cb(msg);
 }
 
 export function connectSocket(): Promise<Socket> {
@@ -87,21 +102,19 @@ export function connectSocket(): Promise<Socket> {
 
     socket.on('connect', () => resolve(socket!));
     socket.on('connect_error', (err) => reject(err));
+    socket.on('messageBroadcast', dispatchMessage);
 
-    socket.on('messageBroadcast', (data: any) => {
-      // Only relay messages NOT from the current user
-      if (data.senderId === userId) return;
-
-      const msg: ChannelMessage = {
-        id: data.id || data.messageId || crypto.randomUUID(),
-        channelId: data.channelId ?? '',
-        authorId: data.senderId ?? '',
-        content: data.text ?? data.message ?? data.content ?? '',
-        createdAt: new Date(data.createdAt ?? Date.now()).toISOString(),
-        metadata: data.metadata,
-      };
-      for (const cb of messageListeners) cb(msg);
-    });
+    // Fleet API Socket.IO — receives mission progress messages (bypasses ElizaOS SQL)
+    if (!fleetSocket) {
+      fleetSocket = io('/', {
+        path: '/fleet/socket.io',
+        transports: ['websocket', 'polling'],
+      });
+      fleetSocket.on('messageBroadcast', dispatchMessage);
+      fleetSocket.on('connect_error', () => {
+        // Silent — fleet socket is optional, progress messages are non-critical
+      });
+    }
   });
 }
 
@@ -138,4 +151,6 @@ export function sendSocketMessage(
 export function disconnectSocket() {
   socket?.disconnect();
   socket = null;
+  fleetSocket?.disconnect();
+  fleetSocket = null;
 }

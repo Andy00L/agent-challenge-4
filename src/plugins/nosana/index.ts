@@ -334,6 +334,15 @@ export const nosanaPlugin: Plugin = {
       }
     });
 
+    // Socket.IO on Fleet API — used for progress messages (bypasses ElizaOS SQL inserts)
+    const { Server: SocketIOServer } = await import('socket.io');
+    const fleetIO = new SocketIOServer(server, {
+      path: '/fleet/socket.io',
+      cors: { origin: corsOrigin, credentials: true, methods: ['GET', 'POST'] },
+    });
+    (global as any).__agentforge_io = fleetIO;
+    console.log('[AgentForge:FleetAPI] Socket.IO ready on /fleet/socket.io');
+
     // Test embedding availability at boot (log once)
     try {
       const baseUrl = process.env.OPENAI_API_URL || '';

@@ -35,20 +35,40 @@ export const executeMissionAction: Action = {
   handler: async (_runtime: any, message: any, _state?: any, _options?: any, callback?: any) => {
     const mission = message.content?.text || '';
     const orchestrator = new MissionOrchestrator();
+    const channelId = message.channel_id || message.channelId || '';
+    const agentId = _runtime?.agentId || '';
 
-    const sendUpdate = async (text: string) => {
-      if (!callback) return;
+    // Progress updates go directly via Fleet API Socket.IO — bypasses ElizaOS SQL inserts entirely
+    const sendProgress = async (text: string) => {
       try {
-        // Each callback must have a unique ID to prevent DB duplicate key errors in ElizaOS
-        await callback({ id: randomUUID(), text, action: 'EXECUTE_MISSION' });
-      } catch (err: any) {
-        // Still ignore errors — the orchestrator must not crash due to chat delivery failure
-        console.warn(`[AgentForge:Mission] Callback failed: ${err.message?.slice(0, 100)}`);
+        const io = (global as any).__agentforge_io;
+        if (io) {
+          io.emit('messageBroadcast', {
+            id: randomUUID(),
+            senderId: agentId,
+            senderName: 'AgentForge',
+            text,
+            channelId,
+            createdAt: Date.now(),
+            source: 'agentforge',
+          });
+        }
+      } catch {
+        // Silent — progress messages are non-critical
       }
     };
 
     try {
-      const result = await orchestrator.execute(mission, sendUpdate);
+      // Bookend 1: Initial acknowledgment via ElizaOS callback (persisted to conversation history)
+      if (callback) {
+        await callback({
+          id: randomUUID(),
+          text: `\u{1F680} **Mission received!** Planning pipeline for: "${mission.slice(0, 100)}"`,
+          action: 'EXECUTE_MISSION',
+        }).catch(() => {});
+      }
+
+      const result = await orchestrator.execute(mission, sendProgress);
 
       const completedCount = result.steps.filter(s => s.status === 'complete').length;
       const summary = [
@@ -59,11 +79,17 @@ export const executeMissionAction: Action = {
         'View the full output in the **Mission Canvas** panel \u2192',
       ].join('\n');
 
-      await sendUpdate(summary);
+      // Bookend 2: Final result via ElizaOS callback (persisted to conversation history)
+      if (callback) {
+        await callback({ id: randomUUID(), text: summary, action: 'EXECUTE_MISSION' }).catch(() => {});
+      }
+
       return { text: result.finalOutput, success: true, data: { result } };
     } catch (error: any) {
       const errMsg = `Mission failed: ${error.message || error}`;
-      await sendUpdate(errMsg);
+      if (callback) {
+        await callback({ id: randomUUID(), text: errMsg, action: 'EXECUTE_MISSION' }).catch(() => {});
+      }
       return { text: errMsg, success: false, error: error.message };
     }
   },
