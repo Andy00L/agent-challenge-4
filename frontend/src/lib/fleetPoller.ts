@@ -13,7 +13,7 @@ export async function pollFleetOnce(): Promise<void> {
   if (!_agentId) return;
 
   try {
-    const res = await fleetFetch(`/fleet?agentId=${_agentId}`);
+    const res = await fleetFetch(`/fleet?agentId=${encodeURIComponent(_agentId)}`);
     if (!res.ok) return;
 
     const contentType = res.headers.get('content-type') ?? '';

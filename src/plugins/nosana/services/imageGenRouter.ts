@@ -98,9 +98,11 @@ async function generateWithDallE(
     const body = await res.text().catch(() => '');
     const isSafety = body.includes('safety') || body.includes('content_policy') || res.status === 400;
     if (isSafety) {
-      throw new Error(`DALL-E safety rejection: ${body.slice(0, 200)}`);
+      console.warn(`[AgentForge:ImageGen] DALL-E safety rejection (${res.status}): ${body.slice(0, 300)}`);
+      throw new Error(`DALL-E safety rejection (status: ${res.status})`);
     }
-    throw new Error(`DALL-E API error ${res.status}: ${body.slice(0, 200)}`);
+    console.warn(`[AgentForge:ImageGen] DALL-E API error (${res.status}): ${body.slice(0, 300)}`);
+    throw new Error(`DALL-E image generation failed (status: ${res.status})`);
   }
 
   const data = await res.json() as any;
@@ -193,7 +195,8 @@ export class ImageGenRouter {
     if (process.env.FAL_KEY) {
       try {
         console.log('[AgentForge:ImageGen] Trying fal.ai Flux...');
-        const { fal } = await (Function('return import("@fal-ai/client")')() as Promise<any>);
+        // @ts-ignore — @fal-ai/client lacks type declarations; dynamic import is intentional
+        const { fal } = await import('@fal-ai/client');
         fal.config({ credentials: process.env.FAL_KEY! });
         const result = (await fal.subscribe('fal-ai/flux/schnell', {
           input: { prompt, image_size: { width, height } },

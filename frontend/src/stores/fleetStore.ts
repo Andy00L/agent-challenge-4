@@ -66,7 +66,7 @@ export const useFleetStore = create<FleetStore>((set) => ({
   setMarkets: (markets) => set({ markets }),
   fetchActivity: async (deploymentId) => {
     try {
-      const res = await fleetFetch(`/fleet/${deploymentId}/activity`);
+      const res = await fleetFetch(`/fleet/${encodeURIComponent(deploymentId)}/activity`);
       if (res.ok) {
         const data = await res.json();
         set((state) => ({

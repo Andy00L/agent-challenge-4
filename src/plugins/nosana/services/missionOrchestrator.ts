@@ -168,6 +168,7 @@ function detectCapabilities() {
 const generatedMedia = new Map<string, { data: Buffer; contentType: string; createdAt: number }>();
 const MEDIA_TTL_MS = 3_600_000; // 1 hour
 const MEDIA_MAX_ENTRIES = 100;
+const MEDIA_MAX_BYTES = 500 * 1024 * 1024; // 500MB total memory cap
 
 export function getMedia(id: string): { data: Buffer; contentType: string } | undefined {
   const entry = generatedMedia.get(id);
@@ -179,17 +180,28 @@ export function getMedia(id: string): { data: Buffer; contentType: string } | un
   return entry;
 }
 
-/** Evict expired entries and enforce max size */
+/** Evict expired entries and enforce max entry count + byte size */
 function evictExpiredMedia(): void {
   const now = Date.now();
   for (const [id, entry] of generatedMedia) {
     if (now - entry.createdAt > MEDIA_TTL_MS) generatedMedia.delete(id);
   }
-  // If still over limit, remove oldest entries
+  // Enforce entry count limit
   if (generatedMedia.size > MEDIA_MAX_ENTRIES) {
     const sorted = [...generatedMedia.entries()].sort((a, b) => a[1].createdAt - b[1].createdAt);
     const toRemove = sorted.slice(0, generatedMedia.size - MEDIA_MAX_ENTRIES);
     for (const [id] of toRemove) generatedMedia.delete(id);
+  }
+  // Enforce total byte size limit
+  let totalBytes = 0;
+  for (const entry of generatedMedia.values()) totalBytes += entry.data.length;
+  if (totalBytes > MEDIA_MAX_BYTES) {
+    const sorted = [...generatedMedia.entries()].sort((a, b) => a[1].createdAt - b[1].createdAt);
+    for (const [id, entry] of sorted) {
+      if (totalBytes <= MEDIA_MAX_BYTES) break;
+      totalBytes -= entry.data.length;
+      generatedMedia.delete(id);
+    }
   }
 }
 
@@ -1084,7 +1096,7 @@ Respond with ONLY the JSON array:`,
       if (!Array.isArray(raw) || raw.length === 0) throw new Error('Empty pipeline');
 
       let steps: PipelineStep[] = raw
-        .filter(s => s.template && s.name && s.task && (AGENT_TEMPLATES[s.template] || s.template === 'custom'))
+        .filter(s => s.template && s.name && s.task && AGENT_TEMPLATES[s.template])
         .slice(0, 8)
         .map((s, i) => {
           let dependsOn: string | string[] | undefined;
@@ -1529,11 +1541,13 @@ Respond with ONLY the JSON array:`,
       }
 
       try {
-        // Each deployment selects its OWN market (claim-tracker aware)
-        const nodeMarket = await manager.getBestMarket([...coldMarkets]);
+        // Atomic select + claim: lock prevents parallel deploys from all picking the same market
+        const tracker = getClaimTracker();
+        const nodeMarket = await tracker.selectAndClaim(
+          () => manager.getBestMarket([...coldMarkets])
+        );
         if (!nodeMarket) throw new Error('No GPU markets available');
 
-        const tracker = getClaimTracker();
         log(`node:status — ${node.step.name}: deploying to ${nodeMarket.name} (${tracker.getEffectiveIdle(nodeMarket)} effective idle)`);
 
         const dep = await manager.createAndStartDeployment({
@@ -1549,7 +1563,6 @@ Respond with ONLY the JSON array:`,
           resolvedMarket: nodeMarket,
           timeout: 30,
         });
-        tracker.claim(nodeMarket.address);
         node.deploymentId = dep.id;
         node.url = dep.url;
         (node as any)._market = nodeMarket.name;
@@ -1610,7 +1623,10 @@ Respond with ONLY the JSON array:`,
         narrate(`\u{26A0}\u{FE0F} **${node.step.name}** timeout on ${currentMarketName} — trying another GPU...`);
         try { if (node.deploymentId) await manager.stopDeployment(node.deploymentId); } catch (e) { log(`Failed to stop ${node.step.name}: ${e}`); }
 
-        const nextMarket = await manager.getNextBestMarket(triedMarketAddresses);
+        // Atomic select + claim for fallback market
+        const nextMarket = await tracker.selectAndClaim(
+          () => manager.getNextBestMarket(triedMarketAddresses)
+        );
         if (!nextMarket) {
           log(`node:status — ${node.step.name}: no alternative markets for attempt ${attempt + 1}`);
           break;
@@ -1636,7 +1652,6 @@ Respond with ONLY the JSON array:`,
             resolvedMarket: nextMarket,
             timeout: 30,
           });
-          tracker.claim(nextMarket.address);
           node.deploymentId = newDep.id;
           node.url = newDep.url;
           (node as any)._market = nextMarket.name;
@@ -1644,6 +1659,7 @@ Respond with ONLY the JSON array:`,
           (node as any)._marketAddress = nextMarket.address;
           syncState();
         } catch (redeployErr: any) {
+          tracker.release(nextMarket.address); // Release claim on failed deploy
           log(`node:status — ${node.step.name}: redeploy failed — ${redeployErr.message}`);
           break; // Can't redeploy, give up
         }

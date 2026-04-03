@@ -56,7 +56,8 @@ async function generateWithOpenAI(text: string, apiKey: string): Promise<TTSResu
 
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    throw new Error(`OpenAI TTS HTTP ${res.status}: ${body.slice(0, 200)}`);
+    console.warn(`[AgentForge:TTS] OpenAI TTS error (${res.status}): ${body.slice(0, 300)}`);
+    throw new Error(`OpenAI TTS failed (status: ${res.status})`);
   }
 
   const audio = Buffer.from(await res.arrayBuffer());
@@ -164,7 +165,8 @@ async function generateWithElevenLabs(text: string, apiKey: string): Promise<TTS
 
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    throw new Error(`ElevenLabs TTS HTTP ${res.status}: ${body.slice(0, 200)}`);
+    console.warn(`[AgentForge:TTS] ElevenLabs error (${res.status}): ${body.slice(0, 300)}`);
+    throw new Error(`ElevenLabs TTS failed (status: ${res.status})`);
   }
 
   const audio = Buffer.from(await res.arrayBuffer());
@@ -193,7 +195,8 @@ async function generateWithFal(text: string, apiKey: string): Promise<TTSResult>
 
   if (!submitRes.ok) {
     const body = await submitRes.text().catch(() => '');
-    throw new Error(`fal.ai submit HTTP ${submitRes.status}: ${body.slice(0, 200)}`);
+    console.warn(`[AgentForge:TTS] fal.ai error (${submitRes.status}): ${body.slice(0, 300)}`);
+    throw new Error(`fal.ai TTS failed (status: ${submitRes.status})`);
   }
 
   const submitData = await submitRes.json() as any;
@@ -261,7 +264,8 @@ async function generateWithCoqui(text: string, serviceUrl: string): Promise<TTSR
 
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    throw new Error(`Coqui TTS HTTP ${res.status}: ${body.slice(0, 200)}`);
+    console.warn(`[AgentForge:TTS] Coqui TTS error (${res.status}): ${body.slice(0, 300)}`);
+    throw new Error(`Coqui TTS failed (status: ${res.status})`);
   }
 
   const audio = Buffer.from(await res.arrayBuffer());

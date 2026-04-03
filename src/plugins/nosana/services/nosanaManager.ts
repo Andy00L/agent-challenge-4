@@ -1023,6 +1023,31 @@ export class NosanaManager {
 
 class MarketClaimTracker {
   private claimed = new Map<string, number>();
+  private _mutex: Promise<void> = Promise.resolve();
+
+  /**
+   * Atomic select + claim: acquires a lock, runs the market selection function,
+   * then claims the selected market BEFORE releasing the lock.
+   * Prevents parallel deploys from all seeing "0 claimed" on the same market.
+   */
+  async selectAndClaim(selectMarket: () => Promise<GpuMarket | null>): Promise<GpuMarket | null> {
+    const release = await this._acquireLock();
+    try {
+      const market = await selectMarket();
+      if (market) this.claim(market.address);
+      return market;
+    } finally {
+      release();
+    }
+  }
+
+  private _acquireLock(): Promise<() => void> {
+    let release!: () => void;
+    const next = new Promise<void>(resolve => { release = resolve; });
+    const prev = this._mutex;
+    this._mutex = next;
+    return prev.then(() => release);
+  }
 
   claim(marketAddress: string): void {
     this.claimed.set(marketAddress, (this.claimed.get(marketAddress) || 0) + 1);
@@ -1044,6 +1069,7 @@ class MarketClaimTracker {
 
   reset(): void {
     this.claimed.clear();
+    this._mutex = Promise.resolve();
   }
 }
 

@@ -251,6 +251,19 @@ export const nosanaPlugin: Plugin = {
       if (!dep.url) { res.json({ status: 'no_url', messages: [], agentName: dep.name }); return; }
 
       const baseUrl = (dep.url.startsWith('https://') || dep.url.startsWith('http://')) ? dep.url : `https://${dep.url}`;
+      // SSRF protection: only allow known Nosana node domains and localhost
+      try {
+        const parsed = new URL(baseUrl);
+        const isNosana = parsed.hostname.endsWith('.nos.ci') || parsed.hostname.endsWith('.nosana.io');
+        const isLocal = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
+        if (!isNosana && !isLocal) {
+          res.json({ status: 'blocked', messages: [], agentName: dep.name });
+          return;
+        }
+      } catch {
+        res.json({ status: 'invalid_url', messages: [], agentName: dep.name });
+        return;
+      }
       try {
         const agentsRes = await fetch(`${baseUrl}/api/agents`, { signal: AbortSignal.timeout(5000) });
         if (!agentsRes.ok) { res.json({ status: 'unreachable', messages: [], agentName: dep.name }); return; }
@@ -309,8 +322,9 @@ export const nosanaPlugin: Plugin = {
       res.json(dep);
     });
     const port = parseInt(process.env.FLEET_API_PORT || '3001');
-    const server = app.listen(port, '0.0.0.0', () => {
-      console.log(`[AgentForge:FleetAPI] Fleet API running on http://0.0.0.0:${port}`);
+    const host = process.env.FLEET_API_HOST || '127.0.0.1';
+    const server = app.listen(port, host, () => {
+      console.log(`[AgentForge:FleetAPI] Fleet API running on http://${host}:${port}`);
     });
     server.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'EADDRINUSE') {
@@ -323,7 +337,15 @@ export const nosanaPlugin: Plugin = {
     // Test embedding availability at boot (log once)
     try {
       const baseUrl = process.env.OPENAI_API_URL || '';
-      if (baseUrl) {
+      // Only send API key to trusted domains to prevent credential exfiltration
+      const isTrustedUrl = baseUrl && (() => {
+        try {
+          const u = new URL(baseUrl);
+          return u.hostname === 'localhost' || u.hostname === '127.0.0.1'
+            || u.hostname.endsWith('openai.com') || u.hostname.endsWith('.nos.ci');
+        } catch { return false; }
+      })();
+      if (baseUrl && isTrustedUrl) {
         const res = await fetch(`${baseUrl}/embeddings`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.OPENAI_API_KEY || 'nosana'}` },

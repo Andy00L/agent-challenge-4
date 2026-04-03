@@ -2,9 +2,11 @@
 
 ![ElizaOS v2](https://img.shields.io/badge/ElizaOS-v2_(1.0.0)-blue) ![Nosana GPU](https://img.shields.io/badge/Nosana-GPU_Network-purple) ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue) ![React 19](https://img.shields.io/badge/React-19.2-cyan) ![Docker](https://img.shields.io/badge/Docker-node:23--slim-green) ![shadcn/ui](https://img.shields.io/badge/shadcn/ui-11_components-black)
 
+![AgentForge Demo](./assets/demo.png)
+
 ![NosanaXEliza](./assets/NosanaXEliza.jpg)
 
-An ElizaOS v2 plugin that turns natural language missions into multi-agent DAG pipelines running on Nosana's decentralized GPU network. You type "compare CrewAI vs AutoGen vs ElizaOS" and it deploys 5 agents across separate GPU nodes, runs 3 researchers in parallel, merges results through an analyst, and shows the whole thing live on a ReactFlow canvas.
+An ElizaOS v2 plugin that turns natural language missions into multi-agent DAG pipelines running on Nosana's decentralized GPU network. Type "create a 30s video about ants" and it deploys 5 agents across separate GPU nodes, boots ComfyUI for image generation, generates TTS narration, and assembles a slideshow video. Or type "compare CrewAI vs AutoGen vs ElizaOS" and it runs 3 researchers in parallel, merges results through an analyst, and shows everything live on a ReactFlow canvas.
 
 ## Quick Start
 
@@ -49,7 +51,7 @@ nosana job create nos_job_def/nosana_eliza_job_definition.json --market <market-
 
 The frontend is a split-panel app: chat on the left (Socket.IO), ReactFlow canvas or fleet dashboard on the right. The canvas updates every 2 seconds with node status, parallel execution indicators, and click-to-view output panels. Fleet dashboard shows live GPU market pricing, credit balance, and per-agent cost tracking.
 
-5 agent templates (researcher, writer, analyst, monitor, publisher) with automatic template selection from natural language. Researchers get Tavily web search with a 90-second enrichment window. Workers run as Docker containers on Nosana GPU nodes via `@nosana/kit` SDK.
+9 agent templates (researcher, writer, analyst, monitor, publisher, scene-writer, image-generator, video-generator, narrator) with automatic template selection from natural language. Multimodal pipeline: ComfyUI SD 1.5 for images, OpenAI/ElevenLabs/fal.ai/Coqui for TTS, FFmpeg slideshow assembly for video. Researchers get Tavily web search with a 90-second enrichment window. Workers run as Docker containers on Nosana GPU nodes via `@nosana/kit` SDK.
 
 ## How It Works
 
@@ -64,11 +66,13 @@ graph LR
 
 1. User sends a mission via chat (Socket.IO to ElizaOS)
 2. `EXECUTE_MISSION` action triggers the `MissionOrchestrator`
-3. Orchestrator plans a DAG (LLM planner with regex fallback for competitive analysis, research+write, and parallel patterns)
-4. Deploys agents level by level. Agents at the same depth run in parallel on separate GPU nodes
-5. Each agent gets its task via HTTP POST to the ElizaOS API on that GPU node
-6. Outputs chain forward. The final leaf node result becomes the mission output
-7. All agents auto-stop when complete. Credits stop burning
+3. Orchestrator plans a DAG (LLM planner with regex fallback for competitive analysis, video, research+write patterns)
+4. Pre-boots ALL GPU resources in parallel at T=0: workers + ComfyUI media service (if video/image pipeline)
+5. Each worker selects its own market via atomic `selectAndClaim()` (mutex prevents oversaturation)
+6. Executes level by level. Agents at the same depth run in parallel. Multimodal steps (image, video, narrator) execute directly
+7. Failed dependencies cascade: if a critical step fails, downstream steps are skipped (not executed with garbage input)
+8. Outputs chain forward. Video pipeline: scenes + images + TTS audio assembled into MP4 slideshow
+9. All agents and media services auto-stop when complete. Credits stop burning
 
 ## Architecture
 
@@ -145,40 +149,69 @@ sequenceDiagram
 
 **Live ReactFlow Canvas.** Custom `MissionNode` components with status dots, progress animations, and click-to-expand output. Edges show data flow between agents. The canvas auto-layouts using depth and parallel index.
 
-**GPU Market Fallback.** If a deployment gets QUEUED (no available nodes), it waits 120 seconds then cancels and redeploys on the next cheapest PREMIUM market. Tries up to 3 markets before giving up. Worker boot retry works the same way: if `waitForReady` times out after 180 seconds, it redeploys on a different market.
+**Blockchain GPU Detection.** Market availability is read from the Nosana blockchain via `client.jobs.markets()`, not the REST API (which always returns empty). The system shows real idle node counts per market and selects markets with actual available GPUs. A `MarketClaimTracker` with an async mutex prevents parallel deploys from oversaturating the same market.
+
+**Smart Market Distribution.** Each deployment independently selects its own market via `selectAndClaim()` (atomic lock). Deploys spread across markets based on effective idle nodes (blockchain idle minus already-claimed). If a worker times out (150s), it retries on up to 3 different markets before giving up.
+
+**Multimodal Media Pipeline.** Video missions pre-boot ComfyUI (`docker.io/nosana/comfyui:2.0.5`) at T=0 alongside workers. Image generation falls back through: ComfyUI SD 1.5 on Nosana, DALL-E 3, fal.ai Flux, manual endpoint. TTS falls back through: OpenAI, ElevenLabs (with word-level timestamps), fal.ai PlayAI, Coqui on Nosana GPU.
 
 **Web Search Enrichment.** Researcher agents use Tavily via `plugin-web-search`. After the initial response, `WorkerClient` polls for up to 90 seconds waiting for a web-enriched follow-up (the REPLY, WEB_SEARCH, REPLY pattern). Takes the longest response found.
 
-**Orphan Cleanup.** Before each new mission, the orchestrator stops all running agents from previous sessions. No credit leak from forgotten deployments.
+**Pipeline Error Handling.** If a critical dependency fails (e.g. ScriptWriter can't boot), all downstream steps are automatically skipped instead of producing garbage output. The mission reports partial completion with succeeded/failed/skipped counts.
 
-**Mission Templates.** 4 one-click templates in the chat panel: Research Pipeline (3 agents), Content Pipeline (4 agents, parallel), Competitive Analysis (5 agents, parallel), Quick Agent (1 agent).
+**Cost Tracking.** Live cost counter in the header and fleet dashboard. Per-agent cost/hr, total spent, and Nosana credit balance. GPU market cards show idle node counts from blockchain data (green = idle, yellow = busy, gray = queued).
 
-**Cost Tracking.** Live cost counter in the header and fleet dashboard. Per-agent cost/hr, total spent, and Nosana credit balance. The orchestrator narrates intermediate costs during multi-level pipelines.
+## Media Pipeline
+
+Video missions run a 5-step pipeline: Researcher, ScriptWriter, SceneWriter + Narrator (parallel), VideoGenerator. Image generation and TTS each have a multi-backend fallback chain.
+
+```mermaid
+flowchart LR
+    subgraph Image Generation
+        I1[ComfyUI SD 1.5 on Nosana] -->|fail| I2[DALL-E 3]
+        I2 -->|fail| I3[fal.ai Flux]
+        I3 -->|fail| I4[Manual endpoint]
+    end
+    subgraph Text-to-Speech
+        T1[OpenAI TTS] -->|fail| T2[ElevenLabs]
+        T2 -->|fail| T3[fal.ai PlayAI]
+        T3 -->|fail| T4[Coqui on Nosana GPU]
+    end
+    subgraph Video Assembly
+        Scenes[Scene Images] --> FFmpeg[FFmpeg Slideshow]
+        Audio[TTS Audio] --> FFmpeg
+        FFmpeg --> MP4[Output .mp4]
+    end
+```
+
+ComfyUI uses `docker.io/nosana/comfyui:2.0.5` with SD 1.5 model from Nosana's S3 cache. Boot timeout is 600s (10 min) to allow model download. Pre-booted at T=0 alongside workers so it's ready when the VideoGenerator step needs it.
 
 ## GPU Market Selection
 
+Each deployment acquires an async mutex lock, selects a market, and claims it atomically before releasing the lock. This prevents parallel deploys from all picking the same 1-node market.
+
 ```mermaid
 flowchart TD
-    Start[Deploy Request] --> Credit{Credits >= 1hr cost?}
-    Credit -->|No| Fail[Throw insufficient credits]
-    Credit -->|Yes| Fetch[Fetch markets from API]
-    Fetch --> Filter[Filter PREMIUM only]
-    Filter --> Sort[Sort by price asc]
-    Sort --> Deploy[Deploy on cheapest]
-    Deploy --> Check{Status after 5s}
-    Check -->|running| Ready[Wait for agent boot]
-    Check -->|queued| QueueWait[Wait up to 120s]
-    Check -->|error/stopped| DeployFail[Throw deploy error]
-    QueueWait --> StillQ{Still queued?}
-    StillQ -->|Under 120s| QueueWait
-    StillQ -->|Over 120s| Cancel[Cancel and try next market]
-    Cancel --> NextMarket{Next PREMIUM market?}
-    NextMarket -->|Found| Deploy
-    NextMarket -->|None| KeepWaiting[Continue waiting up to 10min]
-    Ready --> Boot{Worker ready in 180s?}
+    Start[Deploy Request] --> Lock[Acquire mutex lock]
+    Lock --> Fetch[Fetch markets + blockchain data]
+    Fetch --> P1{Effective idle > 0?}
+    P1 -->|Yes| Pick1[Select cheapest with idle - claimed > 0]
+    P1 -->|No| P2{Blockchain idle > 0?}
+    P2 -->|Yes| Pick2[Select cheapest with idle nodes]
+    P2 -->|No| P3{NODE_QUEUE markets?}
+    P3 -->|Yes| Pick3[Select cheapest NODE_QUEUE]
+    P3 -->|No| Pick4[Select cheapest PREMIUM]
+    Pick1 --> Claim[Claim node + release lock]
+    Pick2 --> Claim
+    Pick3 --> Claim
+    Pick4 --> Claim
+    Claim --> Deploy[Deploy container]
+    Deploy --> Boot{Worker ready in 150s?}
     Boot -->|Yes| Execute[Send task]
-    Boot -->|No| Retry[Redeploy on different market]
-    Retry --> Deploy
+    Boot -->|No| Release[Release claim, mark market cold]
+    Release --> Retry{Attempt < 3?}
+    Retry -->|Yes| Lock
+    Retry -->|No| Error[All markets exhausted]
 ```
 
 ## ElizaOS Plugin Interface
@@ -204,25 +237,32 @@ flowchart TD
 | `analyst` | Data Analyst | web-search, bootstrap, openai | nvidia-3090 | Data analysis, insights, trends |
 | `monitor` | Monitoring Agent | web-search, bootstrap, openai | nvidia-3090 | Periodic source monitoring |
 | `publisher` | Social Publisher | bootstrap, openai | cpu-only | Social media publishing |
+| `scene-writer` | Scene Writer | bootstrap, openai | cpu-only | Break content into visual scenes with image prompts |
+| `image-generator` | Image Generator | bootstrap, openai | nvidia-3090 | Generate images (ComfyUI/DALL-E/fal.ai) |
+| `video-generator` | Slideshow Video | bootstrap, openai | cpu-only | Assemble slideshow from scenes + narration |
+| `narrator` | Narrator | bootstrap, openai | nvidia-3090 | Convert text to speech audio |
 
 ## REST API
 
-Fleet API server runs on port 3001 (standalone Express, started in `init`). 12 endpoints:
+Fleet API server runs on port 3001 (default `127.0.0.1`, configurable via `FLEET_API_HOST`). Authenticated via `x-api-token` header (auto-generated or set via `FLEET_API_TOKEN`). Media endpoints are unauthenticated. 15 endpoints:
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/fleet` | Fleet status with all deployments, costs, spent |
-| GET | `/fleet/:id` | Single deployment details |
-| GET | `/fleet/:id/activity` | Agent activity (messages from worker rooms) |
-| GET | `/fleet/credits` | Nosana credit balance |
-| GET | `/fleet/markets` | Live GPU market pricing |
-| GET | `/fleet/mission` | Current pipeline state |
-| POST | `/fleet/mission/execute` | Start a mission (body: `{mission: string}`, max 10,000 chars) |
-| POST | `/fleet/mission/reset` | Reset pipeline state |
-| GET | `/fleet/mission/history` | Last 10 mission results |
-| GET | `/fleet/mission/export` | Export pipeline as JSON |
-| GET | `/fleet/metrics` | Action execution metrics |
-| GET | `/fleet/api-docs` | API documentation |
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/fleet/auth/token` | localhost only | Discover API token (frontend bootstrap) |
+| GET | `/fleet` | yes | Fleet status with all deployments, costs, spent |
+| GET | `/fleet/:id` | yes | Single deployment details |
+| GET | `/fleet/:id/activity` | yes | Agent activity (messages from worker rooms) |
+| GET | `/fleet/credits` | yes | Nosana credit balance |
+| GET | `/fleet/markets` | yes | Live GPU market pricing with blockchain node counts |
+| GET | `/fleet/mission` | yes | Current pipeline state |
+| POST | `/fleet/mission/execute` | yes | Start a mission (body: `{mission: string}`, max 10,000 chars) |
+| POST | `/fleet/mission/reset` | yes | Reset pipeline state |
+| POST | `/fleet/mission/abort` | yes | Abort running mission |
+| GET | `/fleet/mission/history` | yes | Last 50 mission results |
+| GET | `/fleet/mission/history/:id` | yes | Full mission result by ID |
+| GET | `/fleet/mission/export` | yes | Export pipeline as JSON |
+| GET | `/fleet/media/:id` | no | Serve generated media (images, video, audio) |
+| GET | `/fleet/metrics` | yes | Action execution metrics |
 
 ## Tech Stack
 
@@ -258,8 +298,14 @@ src/
       stopDeployment.ts                       # Graceful agent shutdown
     services/
       missionOrchestrator.ts                  # DAG planning, parallel execution, narration
-      nosanaManager.ts                        # Nosana SDK wrapper, market selection, credits
+      nosanaManager.ts                        # Nosana SDK wrapper, market selection, credits, claim tracker
       workerClient.ts                         # HTTP communication with deployed agents
+      imageGenRouter.ts                       # Image gen fallback chain: ComfyUI, DALL-E, fal.ai
+      comfyuiClient.ts                        # ComfyUI API client (queue, poll, download)
+      ttsClient.ts                            # TTS fallback chain: OpenAI, ElevenLabs, fal.ai, Coqui
+      mediaAssembler.ts                       # FFmpeg slideshow assembly (images + audio = MP4)
+      mediaServiceDefinitions.ts              # Docker job specs for ComfyUI + Coqui TTS
+      videoGenRouter.ts                       # Video generation routing
     providers/
       fleetStatusProvider.ts                  # Injects fleet state into agent context
     evaluators/
@@ -277,9 +323,10 @@ frontend/src/
     ErrorBoundary.tsx                         # React error boundary
     canvas/
       MissionCanvas.tsx                       # ReactFlow canvas, node layout, status bar
-      MissionNode.tsx                         # Custom node component with status indicators
-      OutputPanel.tsx                         # Final mission output viewer
-      NodeOutputPanel.tsx                     # Per-node output viewer
+      MissionNode.tsx                         # Custom node with pill badges, glow shadows, heartbeat
+      OutputPanel.tsx                         # Final output viewer with video/audio players + downloads
+      NodeOutputPanel.tsx                     # Per-node output viewer with media downloads
+      TruncatedMarkdown.tsx                   # Markdown renderer with HTML sanitization
   stores/
     chatStore.ts                              # Chat messages (Zustand)
     fleetStore.ts                             # Fleet state, markets, credits (Zustand)
@@ -304,10 +351,16 @@ worker/src/
 | `OPENAI_API_URL` | Yes | empty | LLM inference base URL (Nosana or Ollama) |
 | `MODEL_NAME` | Yes | `Qwen3.5-27B-AWQ-4bit` | LLM model name |
 | `TAVILY_API_KEY` | For web search | empty | Tavily API key for researcher agents |
+| `ELEVENLABS_API_KEY` | No | empty | ElevenLabs TTS (priority 2 after OpenAI) |
+| `FAL_API_KEY` | No | empty | fal.ai PlayAI TTS (priority 3) |
+| `FAL_KEY` | No | empty | fal.ai Flux image generation |
+| `COMFYUI_ENDPOINT` | No | empty | Manual ComfyUI endpoint URL |
 | `AGENTFORGE_WORKER_IMAGE` | No | `drewdockerus/agentforge-worker:latest` | Docker image for worker agents |
 | `FLEET_API_PORT` | No | `3001` | Fleet API port |
+| `FLEET_API_HOST` | No | `127.0.0.1` | Fleet API bind address |
+| `FLEET_API_TOKEN` | No | auto-generated | API authentication token |
 | `SERVER_PORT` | No | `3000` | ElizaOS server port |
-| `CORS_ORIGIN` | No | all origins | CORS origin restriction (set in production) |
+| `CORS_ORIGIN` | No | `http://localhost:5173` | CORS origin restriction (comma-separated) |
 
 ## Documentation
 
