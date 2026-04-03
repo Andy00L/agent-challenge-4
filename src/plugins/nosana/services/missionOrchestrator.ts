@@ -1498,10 +1498,15 @@ Respond with ONLY the JSON array:`,
     // Track markets that failed during this mission — avoid retrying them for subsequent steps
     const coldMarkets = new Set<string>();
 
-    const market = await manager.getBestMarket();
-    if (!market) throw new Error('No GPU markets available');
-    marketName = market.name;
-    marketCost = market.pricePerHour;
+    // Reset claim tracker for this mission
+    const { getClaimTracker, resetClaimTracker } = await import('./nosanaManager.js');
+    resetClaimTracker();
+
+    // Initial market check (for narration/cost estimates only — NOT used for all deploys)
+    const initialMarket = await manager.getBestMarket();
+    if (!initialMarket) throw new Error('No GPU markets available');
+    marketName = initialMarket.name;
+    marketCost = initialMarket.pricePerHour;
 
     const workerImage = process.env.AGENTFORGE_WORKER_IMAGE || 'drewdockerus/agentforge-worker:latest';
 
@@ -1511,7 +1516,6 @@ Respond with ONLY the JSON array:`,
       const tmpl = AGENT_TEMPLATES[node.step.template] || AGENT_TEMPLATES['researcher'];
       node.status = 'deploying';
       syncState();
-      log(`node:status — ${node.step.name}: deploying`);
       const deployWarnings = checkTemplateRequirements(node.step.template, node.step.name);
       if (deployWarnings.length > 0) {
         missionWarnings.push(...deployWarnings);
@@ -1523,6 +1527,13 @@ Respond with ONLY the JSON array:`,
       }
 
       try {
+        // Each deployment selects its OWN market (claim-tracker aware)
+        const nodeMarket = await manager.getBestMarket([...coldMarkets]);
+        if (!nodeMarket) throw new Error('No GPU markets available');
+
+        const tracker = getClaimTracker();
+        log(`node:status — ${node.step.name}: deploying to ${nodeMarket.name} (${tracker.getEffectiveIdle(nodeMarket)} effective idle)`);
+
         const dep = await manager.createAndStartDeployment({
           name: `mission-${node.step.name}`,
           dockerImage: workerImage,
@@ -1533,12 +1544,16 @@ Respond with ONLY the JSON array:`,
             AGENT_PLUGINS: tmpl.plugins.join(','),
             SERVER_PORT: '3000',
           }),
-          resolvedMarket: market,
+          resolvedMarket: nodeMarket,
           timeout: 30,
         });
+        tracker.claim(nodeMarket.address);
         node.deploymentId = dep.id;
         node.url = dep.url;
-        log(`node:status — ${node.step.name}: deployed (${dep.id})`);
+        (node as any)._market = nodeMarket.name;
+        (node as any)._marketCost = nodeMarket.pricePerHour;
+        (node as any)._marketAddress = nodeMarket.address;
+        log(`node:status — ${node.step.name}: deployed (${dep.id}) on ${nodeMarket.name}`);
         syncState();
       } catch (err: any) {
         node.status = 'error';
@@ -1555,7 +1570,9 @@ Respond with ONLY the JSON array:`,
       if (node.status === 'error' || !node.url) return false;
 
       const triedMarketAddresses: string[] = [...coldMarkets];
-      let currentMarket = market;
+      let currentMarketName = (node as any)._market as string | undefined;
+      let currentMarketAddress = (node as any)._marketAddress as string | undefined;
+      const tracker = getClaimTracker();
 
       for (let attempt = 1; attempt <= MAX_MARKET_ATTEMPTS; attempt++) {
         // Wait for worker to boot on current deployment
@@ -1565,29 +1582,30 @@ Respond with ONLY the JSON array:`,
             await client.waitForReady(WORKER_BOOT_TIMEOUT);
             node.status = 'ready';
             if (attempt > 1) {
-              log(`node:status — ${node.step.name}: ready (fallback market ${currentMarket?.name}, attempt ${attempt})`);
-              narrate(`\u{2705} **${node.step.name}** ready on ${currentMarket?.name} (fallback)`);
+              log(`node:status — ${node.step.name}: ready (fallback market ${currentMarketName}, attempt ${attempt})`);
+              narrate(`\u{2705} **${node.step.name}** ready on ${currentMarketName} (fallback)`);
             } else {
-              log(`node:status — ${node.step.name}: ready`);
+              log(`node:status — ${node.step.name}: ready on ${currentMarketName}`);
             }
             syncState();
             return true;
           } catch (err: any) {
-            log(`node:status — ${node.step.name}: boot timeout on ${currentMarket?.name} (attempt ${attempt}/${MAX_MARKET_ATTEMPTS}) — ${err.message}`);
+            log(`node:status — ${node.step.name}: boot timeout on ${currentMarketName} (attempt ${attempt}/${MAX_MARKET_ATTEMPTS}) — ${err.message}`);
           }
         }
 
-        // Mark this market as cold
-        if (currentMarket) {
-          coldMarkets.add(currentMarket.address);
-          triedMarketAddresses.push(currentMarket.address);
+        // Release claim on failed market and mark cold
+        if (currentMarketAddress) {
+          tracker.release(currentMarketAddress);
+          coldMarkets.add(currentMarketAddress);
+          triedMarketAddresses.push(currentMarketAddress);
         }
 
         // No more attempts left
         if (attempt >= MAX_MARKET_ATTEMPTS) break;
 
         // Redeploy on a different market
-        narrate(`\u{26A0}\u{FE0F} **${node.step.name}** timeout on ${currentMarket?.name} — trying another GPU...`);
+        narrate(`\u{26A0}\u{FE0F} **${node.step.name}** timeout on ${currentMarketName} — trying another GPU...`);
         try { if (node.deploymentId) await manager.stopDeployment(node.deploymentId); } catch (e) { log(`Failed to stop ${node.step.name}: ${e}`); }
 
         const nextMarket = await manager.getNextBestMarket(triedMarketAddresses);
@@ -1596,7 +1614,8 @@ Respond with ONLY the JSON array:`,
           break;
         }
 
-        currentMarket = nextMarket;
+        currentMarketName = nextMarket.name;
+        currentMarketAddress = nextMarket.address;
         log(`node:status — ${node.step.name}: redeploying on ${nextMarket.name} (attempt ${attempt + 1}/${MAX_MARKET_ATTEMPTS})`);
         narrate(`\u{1F504} Redeploying **${node.step.name}** on ${nextMarket.name}...`);
 
@@ -1615,11 +1634,12 @@ Respond with ONLY the JSON array:`,
             resolvedMarket: nextMarket,
             timeout: 30,
           });
+          tracker.claim(nextMarket.address);
           node.deploymentId = newDep.id;
           node.url = newDep.url;
-          // Update per-node market info for UI (Fix 4)
           (node as any)._market = nextMarket.name;
           (node as any)._marketCost = nextMarket.pricePerHour;
+          (node as any)._marketAddress = nextMarket.address;
           syncState();
         } catch (redeployErr: any) {
           log(`node:status — ${node.step.name}: redeploy failed — ${redeployErr.message}`);
@@ -1820,15 +1840,22 @@ Respond with ONLY the JSON array:`,
           let sd15Failed = false;
           const hasNosana = !!(process.env.NOSANA_API_KEY && process.env.NOSANA_API_KEY !== 'YOUR_NOSANA_API_KEY');
 
-          // Try to boot SD 1.5 once for remaining scenes (skip if all covered by siblings)
+          // Get SD 1.5 — pre-booted at T=0, or deploy now, or fallback to DALL-E
           const { setNosanaImageService, markNosanaImageFailed } = await import('./imageGenRouter.js');
           if (scenesNeedingImages.length > 0 && hasNosana && !sd15Failed) {
             try {
               const { IMAGE_SERVICE } = await import('./mediaServiceDefinitions.js');
-              narrate(`\u{1F680} Booting SD 1.5 on Nosana GPU...`);
+              // deployMediaService returns instantly if already pre-booted (reuse path)
+              const bootStart = Date.now();
               sd15Url = await manager.deployMediaService(IMAGE_SERVICE);
-              log(`SD 1.5 ready at ${sd15Url}`);
-              setNosanaImageService(sd15Url); // Share warm container with imageGenRouter
+              const bootMs = Date.now() - bootStart;
+              if (bootMs < 5000) {
+                log(`SD 1.5 pre-booted — reused in ${bootMs}ms at ${sd15Url}`);
+              } else {
+                narrate(`\u{1F680} SD 1.5 ready on Nosana GPU (${Math.round(bootMs / 1000)}s)`);
+                log(`SD 1.5 deployed in ${Math.round(bootMs / 1000)}s at ${sd15Url}`);
+              }
+              setNosanaImageService(sd15Url);
             } catch (bootErr: any) {
               log(`SD 1.5 boot failed: ${bootErr.message} — will use DALL-E/fal.ai`);
               sd15Failed = true;
@@ -2027,14 +2054,23 @@ Respond with ONLY the JSON array:`,
       }
     };
 
-    // 2a. PRE-BOOT: Deploy ALL GPU workers from all depth levels simultaneously
+    // 2a. PRE-BOOT: Deploy ALL GPU resources (workers + media services) simultaneously
     const allGpuWorkers = nodes.filter(n => !DIRECT_EXECUTION_TEMPLATES.includes(n.step.template));
+    const needsImageGen = nodes.some(n => n.step.template === 'video-generator' || n.step.template === 'image-generator');
+    const hasNosanaKey = !!(process.env.NOSANA_API_KEY && process.env.NOSANA_API_KEY !== 'YOUR_NOSANA_API_KEY');
+
+    const allBootPromises: Promise<void>[] = [];
+
+    // Workers
     if (allGpuWorkers.length > 0) {
       log(`Pre-booting ${allGpuWorkers.length} workers in parallel across all depth levels...`);
-      narrate(`\u{1F680} **Deploying ${allGpuWorkers.length} agents simultaneously** across Nosana GPU network...`);
+      const workerMsg = needsImageGen && hasNosanaKey
+        ? `\u{1F680} **Deploying ${allGpuWorkers.length} agents + image generation GPU** simultaneously...`
+        : `\u{1F680} **Deploying ${allGpuWorkers.length} agents simultaneously** across Nosana GPU network...`;
+      narrate(workerMsg);
 
-      await Promise.allSettled(
-        allGpuWorkers.map(async (node) => {
+      allBootPromises.push(
+        ...allGpuWorkers.map(async (node) => {
           try {
             await deployOne(node);
             await waitReady(node);
@@ -2043,39 +2079,79 @@ Respond with ONLY the JSON array:`,
           }
         })
       );
+    }
 
-      const booted = allGpuWorkers.filter(n => n.status === 'ready').length;
-      const failed = allGpuWorkers.filter(n => n.status === 'error').length;
+    // ComfyUI media service — boot alongside workers if pipeline needs image gen
+    if (needsImageGen && hasNosanaKey) {
+      log('Pre-booting ComfyUI (SD 1.5) in parallel with workers...');
+      allBootPromises.push(
+        (async () => {
+          try {
+            const { IMAGE_SERVICE } = await import('./mediaServiceDefinitions.js');
+            const serviceUrl = await manager.deployMediaService(IMAGE_SERVICE);
+            log(`ComfyUI pre-booted at ${serviceUrl}`);
+            const { setNosanaImageService } = await import('./imageGenRouter.js');
+            setNosanaImageService(serviceUrl);
+            narrate('\u{2705} **Image generation GPU ready**');
+          } catch (err: any) {
+            log(`ComfyUI pre-boot failed: ${err.message} — will retry or fallback to DALL-E`);
+            try {
+              const { markNosanaImageFailed } = await import('./imageGenRouter.js');
+              markNosanaImageFailed();
+            } catch { /* best effort */ }
+          }
+        })()
+      );
+    }
+
+    if (allBootPromises.length > 0) {
+      await Promise.allSettled(allBootPromises);
+    }
+
+    const booted = allGpuWorkers.filter(n => n.status === 'ready').length;
+    const failed = allGpuWorkers.filter(n => n.status === 'error').length;
+    if (allGpuWorkers.length > 0) {
       log(`Pre-boot complete: ${booted} ready, ${failed} failed out of ${allGpuWorkers.length}`);
+
+      // Log GPU distribution summary
+      const distribution: Record<string, number> = {};
+      for (const n of allGpuWorkers.filter(w => w.status === 'ready')) {
+        const mkt = (n as any)._market || 'unknown';
+        distribution[mkt] = (distribution[mkt] || 0) + 1;
+      }
+      if (Object.keys(distribution).length > 0) {
+        log(`GPU distribution: ${Object.entries(distribution).map(([m, c]) => `${m}: ${c}`).join(', ')}`);
+      }
+
       if (booted > 0) {
         narrate(`\u{2705} **${booted} agents ready** — executing pipeline...`);
       }
+    }
 
-      // Cascade: mark dependents of failed workers as skipped
-      if (failed > 0) {
-        const failedWorkers = allGpuWorkers.filter(n => n.status === 'error');
-        for (const fw of failedWorkers) {
-          const dependents = nodes.filter(n => {
-            const deps = getDependencies(n.step);
-            return deps.includes(fw.step.id);
-          });
-          if (dependents.length > 0) {
-            const depNames = dependents.map(d => d.step.name).join(', ');
-            log(`Pipeline blocked: ${fw.step.name} failed → skipping dependents: ${depNames}`);
-            narrate(
-              `\u{274C} **${fw.step.name}** couldn't boot on any GPU market. ` +
-              `${depNames} depend on it and will be skipped.`
-            );
-            for (const dep of dependents) {
-              if (dep.status === 'pending' || dep.status === 'deploying') {
-                dep.status = 'skipped';
-                dep.output = `[Skipped: dependency ${fw.step.name} failed]`;
-              }
+    // Cascade: mark dependents of failed workers as skipped
+    if (failed > 0) {
+      const failedWorkers = allGpuWorkers.filter(n => n.status === 'error');
+      for (const fw of failedWorkers) {
+        const dependents = nodes.filter(n => {
+          const deps = getDependencies(n.step);
+          return deps.includes(fw.step.id);
+        });
+        if (dependents.length > 0) {
+          const depNames = dependents.map(d => d.step.name).join(', ');
+          log(`Pipeline blocked: ${fw.step.name} failed → skipping dependents: ${depNames}`);
+          narrate(
+            `\u{274C} **${fw.step.name}** couldn't boot on any GPU market. ` +
+            `${depNames} depend on it and will be skipped.`
+          );
+          for (const dep of dependents) {
+            if (dep.status === 'pending' || dep.status === 'deploying') {
+              dep.status = 'skipped';
+              dep.output = `[Skipped: dependency ${fw.step.name} failed]`;
             }
           }
         }
-        syncState();
       }
+      syncState();
     }
 
     // 2b. Execute level by level — workers are already booted, execute immediately
@@ -2144,7 +2220,7 @@ Respond with ONLY the JSON array:`,
           }
 
           for (const n of needDeploy) {
-            narrate(`\u{1F680} Deploying **${n.step.name}** to ${marketName} ($${marketCost?.toFixed(3)}/hr)...`);
+            narrate(`\u{1F680} Deploying **${n.step.name}**...`);
           }
           await Promise.all(needDeploy.map(n => deployOne(n)));
           await Promise.all(needDeploy.map(n => waitReady(n)));
@@ -2337,8 +2413,9 @@ Respond with ONLY the JSON array:`,
     );
     // Stop dynamically deployed media services
     try { await manager.stopAllMediaServices(); log('Media services stopped'); } catch (e) { log(`Media service cleanup failed: ${e}`); }
-    // Reset shared image generation state for next mission
+    // Reset shared state for next mission
     try { const { resetNosanaImageState } = await import('./imageGenRouter.js'); resetNosanaImageState(); } catch { /* best effort */ }
+    resetClaimTracker();
     // Evict expired media to prevent unbounded memory growth
     clearExpiredMedia();
 

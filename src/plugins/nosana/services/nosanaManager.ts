@@ -519,41 +519,56 @@ export class NosanaManager {
 
   /**
    * Get the best available PREMIUM GPU market from Nosana.
-   * Priority: 1) idle nodes (instant), 2) NODE_QUEUE (fast turnaround), 3) any PREMIUM.
+   * Uses claim tracker to avoid oversaturating markets.
+   * Priority: 1) effective idle (idle-claimed), 2) blockchain idle, 3) NODE_QUEUE, 4) any PREMIUM.
    *
    * @param excludeAddresses - Market addresses to skip (cold/failed markets)
    */
   async getBestMarket(excludeAddresses: string[] = []): Promise<GpuMarket | null> {
     const markets = await this.getMarkets(true);
     const excluded = new Set(excludeAddresses);
+    const tracker = _claimTracker;
     const candidates = markets.filter(m =>
       m.pricePerHour > 0 && m.type === 'PREMIUM' && !excluded.has(m.address)
     );
     if (candidates.length === 0) return null;
 
-    // PRIORITY 1: Markets with idle GPU nodes (instant deployment)
+    // PRIORITY 1: Markets with EFFECTIVE idle nodes (blockchain idle - claimed)
+    const withEffective = candidates
+      .filter(m => tracker.getEffectiveIdle(m) > 0)
+      .sort((a, b) => a.pricePerHour - b.pricePerHour);
+
+    if (withEffective.length > 0) {
+      const best = withEffective[0];
+      const effective = tracker.getEffectiveIdle(best);
+      const claimed = tracker.getClaimed(best.address);
+      console.log(`[AgentForge:Manager] Market selected: ${best.name} ($${best.pricePerHour.toFixed(3)}/hr, ${effective} effective idle [${best.nodesAvailable} idle - ${claimed} claimed]) — INSTANT`);
+      return best;
+    }
+
+    // PRIORITY 2: Markets with blockchain idle (all claimed but may still have capacity)
     const withIdle = candidates
       .filter(m => m.hasIdleNodes)
       .sort((a, b) => a.pricePerHour - b.pricePerHour);
 
     if (withIdle.length > 0) {
       const best = withIdle[0];
-      console.log(`[AgentForge:Manager] Market selected: ${best.name} ($${best.pricePerHour.toFixed(3)}/hr, ${best.nodesAvailable} idle nodes) — INSTANT`);
+      console.log(`[AgentForge:Manager] Market selected: ${best.name} ($${best.pricePerHour.toFixed(3)}/hr, ${best.nodesAvailable} idle but ${tracker.getClaimed(best.address)} claimed) — MAY QUEUE`);
       return best;
     }
 
-    // PRIORITY 2: NODE_QUEUE markets (nodes registered but busy, fast turnaround)
+    // PRIORITY 3: NODE_QUEUE markets (nodes registered but busy, fast turnaround)
     const nodeQueue = candidates
       .filter(m => m.queueType === 1)
       .sort((a, b) => a.pricePerHour - b.pricePerHour);
 
     if (nodeQueue.length > 0) {
       const best = nodeQueue[0];
-      console.log(`[AgentForge:Manager] Market selected: ${best.name} ($${best.pricePerHour.toFixed(3)}/hr, NODE_QUEUE but 0 idle) — QUEUED`);
+      console.log(`[AgentForge:Manager] Market selected: ${best.name} ($${best.pricePerHour.toFixed(3)}/hr, NODE_QUEUE) — QUEUED`);
       return best;
     }
 
-    // PRIORITY 3: Any PREMIUM market (JOB_QUEUE, may wait longer)
+    // PRIORITY 4: Any PREMIUM market (JOB_QUEUE, may wait longer)
     const cheapest = candidates.sort((a, b) => a.pricePerHour - b.pricePerHour);
     const best = cheapest[0];
     console.log(`[AgentForge:Manager] Market selected: ${best.name} ($${best.pricePerHour.toFixed(3)}/hr, JOB_QUEUE) — MAY WAIT`);
@@ -562,17 +577,21 @@ export class NosanaManager {
 
   /**
    * Get the next best PREMIUM market, excluding already-tried addresses.
-   * Same priority as getBestMarket: idle nodes → NODE_QUEUE → any PREMIUM.
+   * Same priority as getBestMarket with claim tracker awareness.
    */
   async getNextBestMarket(excludeAddresses: string[]): Promise<GpuMarket | null> {
     const markets = await this.getMarkets(true);
     const excluded = new Set(excludeAddresses);
+    const tracker = _claimTracker;
     const candidates = markets.filter(m =>
       m.pricePerHour > 0 && m.type === 'PREMIUM' && !excluded.has(m.address)
     );
     if (candidates.length === 0) return null;
 
-    // Same priority: idle nodes → NODE_QUEUE → any
+    // Same priority: effective idle → blockchain idle → NODE_QUEUE → any
+    const withEffective = candidates.filter(m => tracker.getEffectiveIdle(m) > 0).sort((a, b) => a.pricePerHour - b.pricePerHour);
+    if (withEffective.length > 0) return withEffective[0];
+
     const withIdle = candidates.filter(m => m.hasIdleNodes).sort((a, b) => a.pricePerHour - b.pricePerHour);
     if (withIdle.length > 0) return withIdle[0];
 
@@ -653,10 +672,11 @@ export class NosanaManager {
       !excluded.has(m.address) &&
       estimateGpuVram(m.gpu || m.name) >= minVramGB
     );
-    // Sort: idle nodes first → NODE_QUEUE → rest, then by price
+    // Sort: effective idle first → blockchain idle → NODE_QUEUE → rest, then by price
+    const tracker = _claimTracker;
     eligible.sort((a, b) => {
-      const aScore = a.hasIdleNodes ? 2 : a.queueType === 1 ? 1 : 0;
-      const bScore = b.hasIdleNodes ? 2 : b.queueType === 1 ? 1 : 0;
+      const aScore = tracker.getEffectiveIdle(a) > 0 ? 3 : a.hasIdleNodes ? 2 : a.queueType === 1 ? 1 : 0;
+      const bScore = tracker.getEffectiveIdle(b) > 0 ? 3 : b.hasIdleNodes ? 2 : b.queueType === 1 ? 1 : 0;
       if (aScore !== bScore) return bScore - aScore;
       return a.pricePerHour - b.pricePerHour;
     });
@@ -995,6 +1015,46 @@ export class NosanaManager {
     const service = this.mediaServiceDeployments.get(serviceKey);
     return service?.status === 'running' ? service.url : null;
   }
+}
+
+// ── Market Claim Tracker ─────────────────────────────────
+// Tracks GPU nodes "claimed" during a mission to prevent oversaturating one market.
+// Reset at mission start/end. Claimed on deploy, released on stop/fail.
+
+class MarketClaimTracker {
+  private claimed = new Map<string, number>();
+
+  claim(marketAddress: string): void {
+    this.claimed.set(marketAddress, (this.claimed.get(marketAddress) || 0) + 1);
+  }
+
+  release(marketAddress: string): void {
+    const current = this.claimed.get(marketAddress) || 0;
+    if (current > 0) this.claimed.set(marketAddress, current - 1);
+  }
+
+  getClaimed(marketAddress: string): number {
+    return this.claimed.get(marketAddress) || 0;
+  }
+
+  getEffectiveIdle(market: GpuMarket): number {
+    const idle = market.nodesAvailable || 0;
+    return Math.max(0, idle - this.getClaimed(market.address));
+  }
+
+  reset(): void {
+    this.claimed.clear();
+  }
+}
+
+let _claimTracker = new MarketClaimTracker();
+
+export function getClaimTracker(): MarketClaimTracker {
+  return _claimTracker;
+}
+
+export function resetClaimTracker(): void {
+  _claimTracker = new MarketClaimTracker();
 }
 
 let _instance: NosanaManager | null = null;
