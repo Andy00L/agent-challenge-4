@@ -80,8 +80,8 @@ export const useMissionStore = create<MissionState>((set, get) => ({
     set({
       pipelineId: data.id ?? null,
       mission: data.mission ?? null,
-      steps: data.steps ?? [],
-      warnings: data.warnings ?? [],
+      steps: Array.isArray(data.steps) ? data.steps : [],
+      warnings: Array.isArray(data.warnings) ? data.warnings : [],
       status: serverStatus,
       finalOutput: data.finalOutput ?? null,
       startedAt: data.startedAt ?? null,
@@ -96,7 +96,7 @@ export const useMissionStore = create<MissionState>((set, get) => ({
     set({
       pipelineId: data.id ?? null,
       mission: data.mission ?? null,
-      steps: (data.steps ?? []).map((s: any) => ({
+      steps: (Array.isArray(data.steps) ? data.steps : []).map((s: any) => ({
         ...s,
         outputPreview: s.output?.slice(0, 300),
       })),

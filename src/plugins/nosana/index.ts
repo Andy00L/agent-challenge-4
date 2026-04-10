@@ -106,7 +106,7 @@ export const nosanaPlugin: Plugin = {
     const FLEET_API_TOKEN = process.env.FLEET_API_TOKEN || randomUUID();
     if (!process.env.FLEET_API_TOKEN) {
       // Log only the last 8 chars to confirm it's set, without exposing the full token
-      console.log(`[AgentForge:FleetAPI] Generated API token (ends ...${FLEET_API_TOKEN.slice(-8)}). Set FLEET_API_TOKEN in .env to use a fixed token.`);
+      console.log(`[AgentForge:FleetAPI] Generated API token (ends ...${FLEET_API_TOKEN.slice(-4)}). Set FLEET_API_TOKEN in .env to use a fixed token.`);
     }
     // Token endpoint — localhost only, lets the frontend discover the token
     app.get('/fleet/auth/token', (req: any, res: any) => {
@@ -321,7 +321,8 @@ export const nosanaPlugin: Plugin = {
       }
       res.json(dep);
     });
-    const port = parseInt(process.env.FLEET_API_PORT || '3001');
+    const rawPort = parseInt(process.env.FLEET_API_PORT || '3001');
+    const port = (Number.isFinite(rawPort) && rawPort >= 1 && rawPort <= 65535) ? rawPort : 3001;
     const host = process.env.FLEET_API_HOST || '127.0.0.1';
     const server = app.listen(port, host, () => {
       console.log(`[AgentForge:FleetAPI] Fleet API running on http://${host}:${port}`);

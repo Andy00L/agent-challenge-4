@@ -67,6 +67,7 @@ export const deployAgentAction: Action = {
           OPENAI_SMALL_MODEL: process.env.MODEL_NAME || 'Qwen3.5-27B-AWQ-4bit',
           OPENAI_LARGE_MODEL: process.env.MODEL_NAME || 'Qwen3.5-27B-AWQ-4bit',
           TAVILY_API_KEY: process.env.TAVILY_API_KEY || '',
+          IMAGE_API_KEY: process.env.IMAGE_API_KEY || '',
           SERVER_PORT: '3000',
         },
         resolvedMarket: market,

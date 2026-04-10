@@ -36,6 +36,55 @@ function estimateDurationMs(text: string): number {
   return Math.round((words.length / 150) * 60 * 1000); // ~150 wpm
 }
 
+// ── Provider detection ──────────────────────────────────
+
+type TTSProvider = 'elevenlabs' | 'openai' | 'falai' | 'none';
+
+interface TTSConfig {
+  provider: TTSProvider;
+  apiKey: string;
+}
+
+function detectTTSProvider(): TTSConfig {
+  const ttsKey = process.env.TTS_API_KEY || '';
+
+  // Legacy support: fall back to ELEVENLABS_API_KEY if TTS_API_KEY not set
+  if (!ttsKey && process.env.ELEVENLABS_API_KEY) {
+    console.warn('[AgentForge:TTS] ELEVENLABS_API_KEY is deprecated. Use TTS_API_KEY instead.');
+    return { provider: 'elevenlabs', apiKey: process.env.ELEVENLABS_API_KEY };
+  }
+
+  if (!ttsKey) {
+    return { provider: 'none', apiKey: '' };
+  }
+
+  // ElevenLabs keys start with "sk_" (underscore)
+  if (ttsKey.startsWith('sk_')) {
+    return { provider: 'elevenlabs', apiKey: ttsKey };
+  }
+
+  // OpenAI keys start with "sk-" (dash)
+  if (ttsKey.startsWith('sk-')) {
+    return { provider: 'openai', apiKey: ttsKey };
+  }
+
+  // fal.ai keys
+  if (ttsKey.startsWith('fal_') || ttsKey.startsWith('key_')) {
+    return { provider: 'falai', apiKey: ttsKey };
+  }
+
+  // Unknown format — try OpenAI as default
+  console.warn(`[AgentForge:TTS] Unknown TTS_API_KEY format. Attempting OpenAI TTS.`);
+  return { provider: 'openai', apiKey: ttsKey };
+}
+
+const ttsConfig = detectTTSProvider();
+if (ttsConfig.provider !== 'none') {
+  console.log(`[AgentForge:TTS] Provider detected: ${ttsConfig.provider} (from TTS_API_KEY)`);
+} else {
+  console.warn('[AgentForge:TTS] No TTS_API_KEY set. TTS will use Coqui/Nosana if available, otherwise silent.');
+}
+
 // ── Backend 1: OpenAI TTS ────────────────────────────────
 
 async function generateWithOpenAI(text: string, apiKey: string): Promise<TTSResult> {
@@ -275,46 +324,40 @@ async function generateWithCoqui(text: string, serviceUrl: string): Promise<TTSR
   return { audio, mimeType: 'audio/wav', durationMs, timestamps, provider: 'coqui-nosana' };
 }
 
-// ── Router: automatic fallback chain ─────────────────────
+// ── Router: TTS_API_KEY auto-detect + Coqui fallback ────
 
 export async function generateTTS(text: string): Promise<TTSResult | null> {
-  const openaiKey = process.env.OPENAI_API_KEY;
-  const openaiUrl = process.env.OPENAI_API_URL || '';
-  const elevenlabsKey = process.env.ELEVENLABS_API_KEY;
-  const falKey = process.env.FAL_API_KEY;
   const nosanaKey = process.env.NOSANA_API_KEY;
 
-  // Backend 1: ElevenLabs (best quality, real word-level timestamps)
-  if (elevenlabsKey) {
+  // Primary: use detected TTS provider from TTS_API_KEY
+  if (ttsConfig.provider === 'elevenlabs') {
     try {
-      console.log('[AgentForge:TTS] Using ElevenLabs TTS (primary)');
-      return await generateWithElevenLabs(text, elevenlabsKey);
+      console.log('[AgentForge:TTS] Using ElevenLabs TTS');
+      return await generateWithElevenLabs(text, ttsConfig.apiKey);
     } catch (err: any) {
-      console.warn(`[AgentForge:TTS] ElevenLabs failed: ${err.message}, trying next`);
+      console.warn(`[AgentForge:TTS] ElevenLabs failed: ${err.message}`);
     }
   }
 
-  // Backend 2: OpenAI TTS (only when pointing at real OpenAI, not Nosana/Ollama)
-  if (openaiKey && openaiUrl.includes('openai.com')) {
+  if (ttsConfig.provider === 'openai') {
     try {
-      console.log('[AgentForge:TTS] Using OpenAI TTS (fallback)');
-      return await generateWithOpenAI(text, openaiKey);
+      console.log('[AgentForge:TTS] Using OpenAI TTS');
+      return await generateWithOpenAI(text, ttsConfig.apiKey);
     } catch (err: any) {
-      console.warn(`[AgentForge:TTS] OpenAI TTS failed: ${err.message}, trying next`);
+      console.warn(`[AgentForge:TTS] OpenAI TTS failed: ${err.message}`);
     }
   }
 
-  // Backend 3: fal.ai PlayAI
-  if (falKey) {
+  if (ttsConfig.provider === 'falai') {
     try {
       console.log('[AgentForge:TTS] Using fal.ai PlayAI TTS');
-      return await generateWithFal(text, falKey);
+      return await generateWithFal(text, ttsConfig.apiKey);
     } catch (err: any) {
-      console.warn(`[AgentForge:TTS] fal.ai failed: ${err.message}, trying next`);
+      console.warn(`[AgentForge:TTS] fal.ai failed: ${err.message}`);
     }
   }
 
-  // Backend 4: Coqui TTS on Nosana GPU
+  // Fallback: Coqui TTS on Nosana GPU (no API key needed for TTS itself)
   if (nosanaKey && nosanaKey !== 'YOUR_NOSANA_API_KEY') {
     try {
       console.log('[AgentForge:TTS] Using Coqui TTS on Nosana GPU');

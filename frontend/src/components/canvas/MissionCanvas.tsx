@@ -507,7 +507,7 @@ function MissionCanvasInner() {
 
   return (
     <div className="relative flex h-full bg-background">
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
         <StatusBar
           status={status}
           startedAt={startedAt}
@@ -528,7 +528,8 @@ function MissionCanvasInner() {
             ))}
           </div>
         )}
-        <div className="flex-1 relative">
+        <div className="flex-1 relative min-h-0">
+          <div className="absolute inset-0">
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -559,12 +560,13 @@ function MissionCanvasInner() {
           >
             <Background
               variant={BackgroundVariant.Dots}
-              color={status === 'complete' ? '#8aba8a' : status === 'executing' || status === 'deploying' ? '#b0aaaa' : '#C5C0B8'}
-              gap={status === 'executing' || status === 'deploying' ? 16 : 24}
-              size={status === 'executing' || status === 'deploying' ? 1.5 : 1}
+              color={status === 'complete' ? '#7aad7a' : status === 'executing' || status === 'deploying' ? '#a09a9a' : '#b0b0a8'}
+              gap={22}
+              size={1.5}
             />
             <Controls position="bottom-left" />
           </ReactFlow>
+          </div>
 
           {selectedStep && !showOutput && (
             <NodeOutputPanel step={selectedStep} onClose={() => setSelectedNodeId(null)} />

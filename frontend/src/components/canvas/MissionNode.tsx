@@ -139,6 +139,19 @@ function MissionNodeComponent({ data }: NodeProps) {
     }
   }, [d.imageCount]);
 
+  // Queued duration counter
+  const [queuedElapsed, setQueuedElapsed] = useState(0);
+  useEffect(() => {
+    if (!d.queuedSince || st !== 'deploying') {
+      setQueuedElapsed(0);
+      return;
+    }
+    const update = () => setQueuedElapsed(Math.floor((Date.now() - d.queuedSince!) / 1000));
+    update();
+    const id = setInterval(update, 1000);
+    return () => clearInterval(id);
+  }, [d.queuedSince, st]);
+
   return (
     <div
       className={[
@@ -178,10 +191,22 @@ function MissionNodeComponent({ data }: NodeProps) {
           <span className="text-sm font-semibold text-foreground truncate">{d.label}</span>
         </div>
 
-        {/* Status pill badge */}
-        <span className={`inline-flex px-2 py-0.5 text-[10px] font-medium rounded-full border mb-2 ${pill}`}>
-          {st === 'deploying' && d.queuedSince ? 'Queued for GPU' : (STATUS_LABELS[st] || st)}
-        </span>
+        {/* Status + template badges */}
+        <div className="flex flex-wrap items-center gap-1 mb-2">
+          <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-medium rounded-full border ${pill}`}>
+            {st === 'deploying' && d.queuedSince ? 'Queued for GPU' : (STATUS_LABELS[st] || st)}
+            {st === 'deploying' && d.queuedSince && queuedElapsed > 0 && (
+              <span className="font-mono cost-counter opacity-70">
+                {Math.floor(queuedElapsed / 60)}:{String(queuedElapsed % 60).padStart(2, '0')}
+              </span>
+            )}
+          </span>
+          {st !== 'mission' && st !== 'output' && d.template && d.template !== 'custom' && (
+            <span className="inline-flex px-1.5 py-0.5 text-[9px] font-medium rounded-full bg-muted text-muted-foreground/70 border border-border/50 uppercase tracking-wider">
+              {d.template.replace(/-/g, ' ')}
+            </span>
+          )}
+        </div>
 
         {/* Mission text (for mission node) */}
         {st === 'mission' && d.missionText && (

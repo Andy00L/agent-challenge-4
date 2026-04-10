@@ -23,12 +23,16 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 function getOrCreateUserId(): string {
   const KEY = 'agentforge-user-id';
-  let id = localStorage.getItem(KEY);
-  if (!id || !UUID_RE.test(id)) {
-    id = crypto.randomUUID();
+  try {
+    const stored = localStorage.getItem(KEY);
+    if (stored && UUID_RE.test(stored)) return stored;
+    const id = crypto.randomUUID();
     localStorage.setItem(KEY, id);
+    return id;
+  } catch {
+    // localStorage unavailable (private browsing, quota exceeded)
+    return crypto.randomUUID();
   }
-  return id;
 }
 
 export const userId = getOrCreateUserId();
@@ -43,7 +47,8 @@ export async function getAgents(): Promise<Agent[]> {
 }
 
 export async function startAgent(agentId: string): Promise<void> {
-  await fetch(`${API_BASE}/agents/${agentId}/start`, { method: 'POST' });
+  const res = await fetch(`${API_BASE}/agents/${agentId}/start`, { method: 'POST' });
+  if (!res.ok) throw new Error(`Failed to start agent: ${res.status}`);
 }
 
 export async function getOrCreateDmChannel(agentId: string): Promise<string> {
@@ -100,8 +105,13 @@ export function connectSocket(): Promise<Socket> {
       transports: ['websocket', 'polling'],
     });
 
-    socket.on('connect', () => resolve(socket!));
-    socket.on('connect_error', (err) => reject(err));
+    // Timeout: reject if socket doesn't connect within 15 seconds
+    const timeout = setTimeout(() => {
+      reject(new Error('Socket connection timed out (15s)'));
+    }, 15_000);
+
+    socket.on('connect', () => { clearTimeout(timeout); resolve(socket!); });
+    socket.on('connect_error', (err) => { clearTimeout(timeout); reject(err); });
     socket.on('messageBroadcast', dispatchMessage);
 
     // Fleet API Socket.IO — receives mission progress messages (bypasses ElizaOS SQL)

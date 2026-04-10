@@ -52,14 +52,15 @@ export async function fleetFetch(path: string, options: RequestInit = {}): Promi
     headers['Content-Type'] = 'application/json';
   }
 
-  const res = await fetch(path, { ...options, headers });
+  const signal = options.signal ?? AbortSignal.timeout(30_000);
+  const res = await fetch(path, { ...options, headers, signal });
 
   // On 401, the token may be stale (server restarted). Try once with a fresh token.
   if (res.status === 401 && token) {
     const freshToken = await getApiToken(true);
     if (freshToken && freshToken !== token) {
       headers['x-api-token'] = freshToken;
-      return fetch(path, { ...options, headers });
+      return fetch(path, { ...options, headers, signal });
     }
   }
 

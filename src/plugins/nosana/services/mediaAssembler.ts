@@ -3,7 +3,7 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { writeFileSync, mkdirSync, existsSync, readFileSync, rmSync } from 'fs';
-import { join } from 'path';
+import { join, resolve } from 'path';
 
 const execFileAsync = promisify(execFile);
 
@@ -50,7 +50,6 @@ export class MediaAssembler {
     const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
     const outPath = join(this.workDir, safeName);
     // Defense-in-depth: verify resolved path is within workDir
-    const { resolve } = require('path') as typeof import('path');
     if (!resolve(outPath).startsWith(resolve(this.workDir))) {
       throw new Error(`Path traversal detected in filename: ${filename}`);
     }

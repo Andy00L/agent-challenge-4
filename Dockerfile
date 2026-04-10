@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y \
   make \
   g++ \
   git \
+  ffmpeg \
   && rm -rf /var/lib/apt/lists/*
 
 ENV ELIZAOS_TELEMETRY_DISABLED=true

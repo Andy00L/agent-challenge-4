@@ -51,3 +51,4 @@ memory.*
 /.eliza/.elizadb
 /dist
 .claude
+logs/

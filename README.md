@@ -153,7 +153,9 @@ sequenceDiagram
 
 **Smart Market Distribution.** Each deployment independently selects its own market via `selectAndClaim()` (atomic lock). Deploys spread across markets based on effective idle nodes (blockchain idle minus already-claimed). If a worker times out (150s), it retries on up to 3 different markets before giving up.
 
-**Multimodal Media Pipeline.** Video missions pre-boot ComfyUI (`docker.io/nosana/comfyui:2.0.5`) at T=0 alongside workers. Image generation falls back through: ComfyUI SD 1.5 on Nosana, DALL-E 3, fal.ai Flux, manual endpoint. TTS falls back through: ElevenLabs (with word-level timestamps), OpenAI, fal.ai PlayAI, Coqui on Nosana GPU.
+**Multimodal Media Pipeline.** Video missions pre-boot ComfyUI (`docker.io/nosana/comfyui:2.0.5`) at T=0 alongside workers (skipped when `IMAGE_API_KEY` is set, since DALL-E 3 handles images via API). Image generation falls back through: DALL-E 3 (if `IMAGE_API_KEY` set), ComfyUI SD 1.5 on Nosana, fal.ai Flux, manual endpoint. TTS falls back through: ElevenLabs (with word-level timestamps), OpenAI, fal.ai PlayAI, Coqui on Nosana GPU.
+
+**Adaptive Video Duration.** The orchestrator parses duration from mission text ("30-second video", "2-minute video", "1:30 video"). Word count, scene count, and seconds-per-scene are calculated dynamically at ~150 words per minute. Range: 15s (3 scenes, 37 words) to 5min (50 scenes, 750 words). Defaults to 30s if no duration specified. SceneWriter prompts include structured image prompt rules (shot type, lighting, style, mood) for diverse DALL-E/SD output.
 
 **Web Search Enrichment.** Researcher agents use Tavily via `plugin-web-search`. After the initial response, `WorkerClient` polls for up to 90 seconds waiting for a web-enriched follow-up (the REPLY, WEB_SEARCH, REPLY pattern). Takes the longest response found.
 
@@ -170,7 +172,10 @@ Video missions run a 5-step pipeline: Researcher, ScriptWriter, SceneWriter + Na
 ```mermaid
 flowchart LR
     subgraph Image Generation
-        I1[ComfyUI SD 1.5 on Nosana] -->|fail| I2[DALL-E 3]
+        I0{IMAGE_API_KEY set?}
+        I0 -->|Yes| I1[OpenAI DALL-E 3 API]
+        I0 -->|No| I2[ComfyUI SD 1.5 on Nosana]
+        I1 -->|fail| I2
         I2 -->|fail| I3[fal.ai Flux]
         I3 -->|fail| I4[Manual endpoint]
     end
@@ -186,7 +191,7 @@ flowchart LR
     end
 ```
 
-ComfyUI uses `docker.io/nosana/comfyui:2.0.5` with SD 1.5 model from Nosana's S3 cache. Boot timeout is 600s (10 min) to allow model download. Pre-booted at T=0 alongside workers so it's ready when the VideoGenerator step needs it.
+When `IMAGE_API_KEY` is set (sk- prefix), DALL-E 3 handles all image generation (no GPU deployment needed, ~5s per image). When not set, ComfyUI uses `docker.io/nosana/comfyui:2.0.5` with SD 1.5 model from Nosana's S3 cache. Boot timeout is 600s (10 min) to allow model download. Pre-booted at T=0 alongside workers so it's ready when the VideoGenerator step needs it. The video pipeline routes all scene images through `ImageGenRouter.generate()`, which respects the IMAGE_API_KEY preference and falls back to ComfyUI on-demand if DALL-E fails.
 
 ## GPU Market Selection
 
@@ -356,7 +361,8 @@ worker/src/
 | `OPENAI_API_URL` | Yes | empty | LLM inference base URL (Nosana or Ollama) |
 | `MODEL_NAME` | Yes | `Qwen3.5-27B-AWQ-4bit` | LLM model name |
 | `TAVILY_API_KEY` | For web search | empty | Tavily API key for researcher agents |
-| `ELEVENLABS_API_KEY` | No | empty | ElevenLabs TTS (priority 1) |
+| `TTS_API_KEY` | No | empty | TTS provider key. Auto-detects: sk_ = ElevenLabs, sk- = OpenAI TTS, fal_ = fal.ai |
+| `IMAGE_API_KEY` | No | empty | Image gen API key. sk- = OpenAI DALL-E 3 ($0.04/img). Unset = ComfyUI on Nosana GPU |
 | `FAL_API_KEY` | No | empty | fal.ai PlayAI TTS (priority 3) |
 | `FAL_KEY` | No | empty | fal.ai Flux image generation |
 | `COMFYUI_ENDPOINT` | No | empty | Manual ComfyUI endpoint URL |

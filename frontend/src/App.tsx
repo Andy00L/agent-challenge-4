@@ -63,14 +63,8 @@ export default function App() {
       </header>
 
       {/* Main layout */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Chat panel */}
-        <div className="w-[35%] min-w-[340px] max-w-[480px] border-r flex flex-col bg-white">
-          <ChatPanel />
-        </div>
-
-        {/* Right side with Tabs */}
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col">
+      <div className="flex-1 overflow-hidden min-h-0">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="h-full flex flex-col min-h-0" style={{ background: 'none' }}>
           <div className="px-5 py-2.5 border-b bg-white shrink-0">
             <TabsList variant="line">
               <TabsTrigger value="mission" className="gap-1.5 px-4 py-2.5">
@@ -89,12 +83,16 @@ export default function App() {
               </TabsTrigger>
             </TabsList>
           </div>
-          <TabsContent value="mission" className="flex-1 m-0 data-[state=inactive]:hidden">
-            <MissionCanvas />
-          </TabsContent>
-          <TabsContent value="fleet" className="flex-1 m-0 overflow-hidden data-[state=inactive]:hidden">
-            <FleetDashboard />
-          </TabsContent>
+          <div className="flex-1 relative overflow-hidden min-h-0 flex flex-col" style={{ background: 'none' }}>
+            <TabsContent value="mission" className="flex-1 m-0 min-h-0 data-[state=inactive]:hidden" style={{ background: 'none' }}>
+              <MissionCanvas />
+            </TabsContent>
+            <TabsContent value="fleet" className="flex-1 m-0 overflow-hidden data-[state=inactive]:hidden">
+              <FleetDashboard />
+            </TabsContent>
+            {/* Chat overlay — only on Mission Canvas tab */}
+            {activeTab === 'mission' && <ChatPanel />}
+          </div>
         </Tabs>
       </div>
     </div>

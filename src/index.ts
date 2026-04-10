@@ -9,6 +9,9 @@ if (process.env.MODEL_NAME) {
   process.env.OPENAI_LARGE_MODEL = process.env.MODEL_NAME;
 }
 
+// This MUST be the first import — it intercepts console.* globally
+import './logger.js';
+
 import { readFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';

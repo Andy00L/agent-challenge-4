@@ -43,7 +43,7 @@ const WORKER_ENV_KEYS = [
   'OPENAI_API_KEY', 'OPENAI_API_URL', 'OPENAI_BASE_URL',
   'MODEL_NAME', 'OPENAI_SMALL_MODEL', 'OPENAI_LARGE_MODEL',
   'TAVILY_API_KEY',
-  'ELEVENLABS_API_KEY', 'FAL_API_KEY',
+  'TTS_API_KEY', 'IMAGE_API_KEY', 'FAL_API_KEY',
   'SERVER_PORT',
 ] as const;
 
@@ -157,9 +157,9 @@ async function searchTavily(query: string): Promise<TavilyResult[]> {
 function detectCapabilities() {
   const hasNosana = !!(process.env.NOSANA_API_KEY && process.env.NOSANA_API_KEY !== 'YOUR_NOSANA_API_KEY');
   return {
-    imageGen: !!((process.env.OPENAI_API_KEY && (process.env.OPENAI_API_URL || '').includes('openai.com')) || process.env.FAL_KEY || process.env.COMFYUI_ENDPOINT || process.env.A1111_ENDPOINT || hasNosana),
-    videoGen: !!((process.env.OPENAI_API_KEY && (process.env.OPENAI_API_URL || '').includes('openai.com')) || process.env.FAL_KEY || process.env.COMFYUI_ENDPOINT || process.env.A1111_ENDPOINT || hasNosana),
-    tts: !!((process.env.OPENAI_API_KEY && (process.env.OPENAI_API_URL || '').includes('openai.com')) || process.env.ELEVENLABS_API_KEY || process.env.FAL_API_KEY || hasNosana),
+    imageGen: !!(process.env.IMAGE_API_KEY || (process.env.OPENAI_API_KEY && (process.env.OPENAI_API_URL || '').includes('openai.com')) || process.env.FAL_KEY || process.env.COMFYUI_ENDPOINT || process.env.A1111_ENDPOINT || hasNosana),
+    videoGen: !!(process.env.IMAGE_API_KEY || (process.env.OPENAI_API_KEY && (process.env.OPENAI_API_URL || '').includes('openai.com')) || process.env.FAL_KEY || process.env.COMFYUI_ENDPOINT || process.env.A1111_ENDPOINT || hasNosana),
+    tts: !!(process.env.TTS_API_KEY || process.env.ELEVENLABS_API_KEY || hasNosana),
   };
 }
 
@@ -551,12 +551,55 @@ function detectVideoWordLimit(task: string): string {
   const durationMatch = task.match(/(\d+)\s*-?\s*second/i);
   if (videoKeywords.test(task) || durationMatch) {
     const seconds = durationMatch ? parseInt(durationMatch[1]) : 30;
-    const maxWords = Math.max(40, Math.round(seconds * 2.5));
+    const maxWords = Math.max(40, Math.round((seconds / 60) * 150));
     return `\n\nCRITICAL: This is a VIDEO NARRATION script. ` +
-      `MAXIMUM ${maxWords} words (${seconds} seconds of speech at ~2.5 words/sec). ` +
+      `MAXIMUM ${maxWords} words (${seconds} seconds of speech at ~150 words/min). ` +
       `Be concise. Every word must earn its place. Do NOT write an essay — write a punchy narration.`;
   }
   return '';
+}
+
+// ── Video duration parser ─────────────────────────────────
+// Parses requested duration from mission text, calculates word count,
+// scene count, and timing. Used for ScriptWriter/SceneWriter prompts
+// and media assembly.
+
+interface VideoDurationConfig {
+  durationSeconds: number;
+  wordCount: number;
+  sceneCount: number;
+  secondsPerScene: number;
+  wordsPerScene: number;
+}
+
+function parseVideoDuration(mission: string): VideoDurationConfig {
+  const text = mission.toLowerCase();
+  let durationSeconds = 30;
+
+  const secMatch = text.match(/(\d+)\s*[-]?\s*(?:second|sec|s)\b/);
+  const minMatch = text.match(/(\d+(?:\.\d+)?)\s*[-]?\s*(?:minute|min|m)\b/);
+  const mmssMatch = text.match(/(\d+):(\d{2})\b/);
+
+  if (minMatch) {
+    durationSeconds = Math.round(parseFloat(minMatch[1]) * 60);
+  } else if (secMatch) {
+    durationSeconds = parseInt(secMatch[1], 10);
+  } else if (mmssMatch) {
+    durationSeconds = parseInt(mmssMatch[1], 10) * 60 + parseInt(mmssMatch[2], 10);
+  }
+
+  const MIN_DURATION = 15;
+  const MAX_DURATION = 300;
+  if (durationSeconds < MIN_DURATION) durationSeconds = MIN_DURATION;
+  if (durationSeconds > MAX_DURATION) durationSeconds = MAX_DURATION;
+
+  const wordCount = Math.round((durationSeconds / 60) * 150);
+  const sceneCount = Math.max(3, Math.round(durationSeconds / 6));
+  const secondsPerScene = parseFloat((durationSeconds / sceneCount).toFixed(1));
+  const wordsPerScene = Math.round(wordCount / sceneCount);
+
+  console.log(`[AgentForge:Video] Duration: ${durationSeconds}s, Words: ${wordCount}, Scenes: ${sceneCount}, ${secondsPerScene}s/scene, ${wordsPerScene} words/scene`);
+  return { durationSeconds, wordCount, sceneCount, secondsPerScene, wordsPerScene };
 }
 
 function buildWriterRootPrompt(task: string, missionText?: string): string {
@@ -740,7 +783,10 @@ function buildAnalystMergePrompt(task: string, parentOutputs: { name: string; ou
 // System prompt: "break content into individual visual scenes... Output structured JSON"
 // → JSON array ONLY. No prose. No markdown. No backticks.
 
-function buildSceneWriterPrompt(task: string, sourceContent: string): string {
+function buildSceneWriterPrompt(task: string, sourceContent: string, duration?: VideoDurationConfig): string {
+  const sceneCount = duration?.sceneCount ?? 5;
+  const secsPerScene = duration?.secondsPerScene ?? 6;
+  const wordsPerScene = duration?.wordsPerScene ?? 15;
   return [
     'ROLE: You are a scene description writer for video production.',
     '',
@@ -750,9 +796,23 @@ function buildSceneWriterPrompt(task: string, sourceContent: string): string {
     'Each scene object must have exactly these fields:',
     '  "sceneNumber": integer starting at 1',
     '  "title": short scene title string',
-    '  "narration": 2-3 sentence voiceover text string',
-    '  "imagePrompt": detailed 50-100 word visual description for AI image generation (describe as a photograph or painting)',
-    '  "durationSeconds": integer between 5 and 8',
+    `  "narration": ~${wordsPerScene} words of voiceover text string`,
+    '  "imagePrompt": 30-60 word image generation prompt (see IMAGE PROMPT RULES below)',
+    `  "durationSeconds": ${Math.round(secsPerScene)}`,
+    '',
+    'IMAGE PROMPT RULES (critical for quality):',
+    '1. Each imagePrompt must be 30-60 words. Short prompts produce generic images.',
+    '2. Include ALL of these in EVERY imagePrompt:',
+    '   - SUBJECT: Be specific ("red fire ants carrying a breadcrumb" not "ants")',
+    '   - SHOT TYPE: Vary between scenes. Use: extreme close-up, close-up, medium shot, wide shot, bird\'s eye view, low angle, overhead',
+    '   - LIGHTING: golden hour, dramatic side lighting, soft diffused, backlit, studio lighting, blue hour',
+    '   - STYLE: photorealistic photography, cinematic film still, macro photography, digital painting, documentary style',
+    '   - MOOD: one word (epic, intimate, mysterious, vibrant, serene, dramatic)',
+    '3. NEVER repeat the same shot type in consecutive scenes. Alternate close and wide.',
+    '4. NEVER start multiple prompts with the same words.',
+    '5. End each prompt with "highly detailed, 8K".',
+    '',
+    'EXAMPLE imagePrompt (good): "Extreme close-up macro photography of a single red fire ant carrying a seed ten times its body weight, dramatic side lighting casting long shadows on sandy terrain, vivid warm tones, highly detailed, 8K"',
     '',
     '=== SOURCE CONTENT ===',
     sourceContent,
@@ -761,9 +821,9 @@ function buildSceneWriterPrompt(task: string, sourceContent: string): string {
     `TASK: ${task}`,
     '',
     'RULES:',
-    '1. Create 4-6 scenes that cover the key points.',
-    '2. Each imagePrompt must be standalone and detailed (subject, style, colors, composition, lighting).',
-    '3. Narration should be engaging and suitable for voiceover.',
+    `1. Create EXACTLY ${sceneCount} scenes that cover the key points.`,
+    '2. Narration should be engaging and suitable for voiceover.',
+    '3. Ensure all strings in JSON are properly escaped.',
     '4. First character of your response MUST be [',
     '5. Last character of your response MUST be ]',
     '',
@@ -865,7 +925,7 @@ function buildPromptForTemplate(
 
   switch (template) {
     case 'scene-writer':
-      return buildSceneWriterPrompt(task, allSourceContent || missionText);
+      return buildSceneWriterPrompt(task, allSourceContent || missionText, parseVideoDuration(missionText));
 
     case 'writer':
       if (!hasParent) return buildWriterRootPrompt(task, missionText);
@@ -1049,7 +1109,7 @@ TASK field rules (CRITICAL for output quality):
 - For researchers: "Find at least 5 specific facts with dates, numbers, and company names about [topic]."
 - For writers: "Write an 800-word [format] with title, introduction, 3 detailed sections, and conclusion about [topic]."
 - For analysts: "Produce a structured analysis with executive summary, comparison table, key findings, and recommendations about [topic]."
-- For scene-writers: "Break the content into 4-6 scenes. For each scene provide: scene number, title, narration text (2-3 sentences), and a detailed image prompt."
+- For scene-writers: "Break the content into N scenes (1 scene per ~6 seconds of video). For each scene provide: scene number, title, narration text, and a detailed image prompt."
 - For image-generators: The task IS the image prompt — be detailed about subject, style, colors, composition.
 - For video-generators: "Assemble a slideshow video from the scene images and narration audio." The video-generator MUST depend on scene-writer and narrator steps.
 - For narrators: The task IS the text to convert to speech.
@@ -1064,7 +1124,7 @@ MULTIMODAL PIPELINE RULES:
 6. video-generator MUST depend on BOTH a scene-writer AND a narrator step. It assembles scene images + narrated audio into an MP4 slideshow.
 7. CRITICAL: video-generator generates its own images internally. NEVER add separate image-generator nodes alongside a video-generator. Maximum 5 steps for video missions: researcher → writer → scene-writer + narrator (parallel) → video-generator.
 
-VIDEO DURATION RULE: When the user requests a specific video duration (e.g. "30-second video"), the writer step MUST include the word count limit in its task field. Approximate: 15s=40 words, 30s=75 words, 60s=150 words, 2min=300 words. Example task for 30s: "Write a concise 30-second narration script (MAXIMUM 75 words) about space exploration."
+VIDEO DURATION RULE: When the user requests a specific video duration, calculate: words = (seconds / 60) * 150, scenes = max(3, round(seconds / 6)). Examples: 15s=37 words/3 scenes, 30s=75 words/5 scenes, 60s=150 words/10 scenes, 2min=300 words/20 scenes, 5min=750 words/50 scenes. The writer task MUST include the word count limit. The scene-writer task MUST include the scene count. Default to 30 seconds if no duration specified.
 
 NAME field: short PascalCase (e.g. "AIResearcher", "BlogWriter", "CompetitiveAnalyst", "SceneWriter", "ImageGen1")
 
@@ -1296,18 +1356,16 @@ Respond with ONLY the JSON array:`,
 
     // Video/animation pattern → 5-step slideshow pipeline
     if (/video|animation|film|movie|clip/i.test(lower)) {
-      console.log('[AgentForge:Orchestrator] Detected video mission — using 5-step slideshow pipeline');
-      const durationMatch = mission.match(/(\d+)\s*-?\s*second/i);
-      const seconds = durationMatch ? parseInt(durationMatch[1]) : 30;
-      const maxWords = Math.max(40, Math.round(seconds * 2.5));
+      const vd = parseVideoDuration(mission);
+      console.log(`[AgentForge:Orchestrator] Detected video mission — ${vd.durationSeconds}s, ${vd.sceneCount} scenes, ${vd.wordCount} words`);
       return [
         { id: 'step-0', template: 'researcher', name: 'Researcher',
           task: `Research the following topic thoroughly: ${mission}`, dependsOn: undefined },
         { id: 'step-1', template: 'writer', name: 'ScriptWriter',
-          task: `Write a concise ${seconds}-second narration script (MAXIMUM ${maxWords} words) about ${mission}. Keep it punchy and visual.`,
+          task: `Write a concise ${vd.durationSeconds}-second narration script (MAXIMUM ${vd.wordCount} words) about ${mission}. Keep it punchy and visual.`,
           dependsOn: 'step-0' },
         { id: 'step-2', template: 'scene-writer', name: 'SceneWriter',
-          task: 'Break the script into 4-6 visual scenes with image prompts',
+          task: `Break the script into exactly ${vd.sceneCount} visual scenes (~${vd.secondsPerScene}s each) with image prompts`,
           dependsOn: 'step-1' },
         { id: 'step-3', template: 'narrator', name: 'Narrator',
           task: 'Generate audio narration from the script',
@@ -1857,10 +1915,12 @@ Respond with ONLY the JSON array:`,
           let sd15Url: string | null = null;
           let sd15Failed = false;
           const hasNosana = !!(process.env.NOSANA_API_KEY && process.env.NOSANA_API_KEY !== 'YOUR_NOSANA_API_KEY');
+          const hasImageApiKey = !!process.env.IMAGE_API_KEY;
 
           // Get SD 1.5 — pre-booted at T=0, or deploy now, or fallback to DALL-E
+          // Skip ComfyUI deployment entirely when IMAGE_API_KEY is set (imageGenRouter handles it)
           const { setNosanaImageService, markNosanaImageFailed } = await import('./imageGenRouter.js');
-          if (scenesNeedingImages.length > 0 && hasNosana && !sd15Failed) {
+          if (scenesNeedingImages.length > 0 && hasNosana && !sd15Failed && !hasImageApiKey) {
             try {
               const { IMAGE_SERVICE } = await import('./mediaServiceDefinitions.js');
               // deployMediaService returns instantly if already pre-booted (reuse path)
@@ -2014,7 +2074,7 @@ Respond with ONLY the JSON array:`,
 
       if (template === 'narrator') {
         if (!capabilities.tts) {
-          narrate(`\u{26A0}\u{FE0F} **Text-to-speech not available.** Skipping "${node.step.name}". Configure OPENAI_API_KEY, ELEVENLABS_API_KEY, FAL_API_KEY, or NOSANA_API_KEY.`);
+          narrate(`\u{26A0}\u{FE0F} **Text-to-speech not available.** Skipping "${node.step.name}". Configure TTS_API_KEY (sk_ = ElevenLabs, sk- = OpenAI) or NOSANA_API_KEY.`);
           node.status = 'skipped';
           node.output = '[TTS not configured — step skipped]';
           node.outputType = 'text';
@@ -2105,7 +2165,9 @@ Respond with ONLY the JSON array:`,
     }
 
     // ComfyUI media service — boot alongside workers if pipeline needs image gen
-    if (needsImageGen && hasNosanaKey) {
+    // Skip pre-boot when IMAGE_API_KEY is set (DALL-E handles images via API)
+    const hasImageApiKey = !!process.env.IMAGE_API_KEY;
+    if (needsImageGen && hasNosanaKey && !hasImageApiKey) {
       log('Pre-booting ComfyUI (SD 1.5) in parallel with workers...');
       allBootPromises.push(
         (async () => {

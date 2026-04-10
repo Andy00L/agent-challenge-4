@@ -7,6 +7,25 @@ import { ComfyUIClient } from './comfyuiClient.js';
 
 export type ImageGenBackend = 'nosana-sd15' | 'openai-dalle' | 'fal' | 'comfyui' | 'none';
 
+// ── IMAGE_API_KEY provider detection ────────────────────
+// If IMAGE_API_KEY is set (sk- prefix = OpenAI), use DALL-E 3 first
+// before any GPU deployment. Saves 2-5 min ComfyUI boot time.
+
+function detectImageApiProvider(): { provider: 'openai' | 'none'; apiKey: string } {
+  const key = process.env.IMAGE_API_KEY || '';
+  if (!key) return { provider: 'none', apiKey: '' };
+  if (key.startsWith('sk-')) return { provider: 'openai', apiKey: key };
+  console.warn(`[AgentForge:ImageGen] Unknown IMAGE_API_KEY format. Ignoring.`);
+  return { provider: 'none', apiKey: '' };
+}
+
+const _imageApiConfig = detectImageApiProvider();
+if (_imageApiConfig.provider === 'openai') {
+  console.log('[AgentForge:ImageGen] Provider: OpenAI DALL-E 3 (from IMAGE_API_KEY)');
+} else {
+  console.log('[AgentForge:ImageGen] Provider: ComfyUI on Nosana GPU (no IMAGE_API_KEY set)');
+}
+
 // ── Shared SD 1.5 container state ───────────────────────
 // Persists across calls within a mission. VideoAssembler boots SD 1.5 once
 // and shares it here so per-image calls reuse the warm container.
@@ -115,6 +134,7 @@ async function generateWithDallE(
 
 export class ImageGenRouter {
   static detectBackend(): ImageGenBackend {
+    if (_imageApiConfig.provider === 'openai') return 'openai-dalle';
     if (process.env.NOSANA_API_KEY && process.env.NOSANA_API_KEY !== 'YOUR_NOSANA_API_KEY') return 'nosana-sd15';
     const openaiKey = process.env.OPENAI_API_KEY;
     const openaiUrl = process.env.OPENAI_API_URL || '';
@@ -139,6 +159,25 @@ export class ImageGenRouter {
   ): Promise<{ base64?: string; url?: string }> {
     const openaiKey = process.env.OPENAI_API_KEY;
     const openaiUrl = process.env.OPENAI_API_URL || '';
+
+    // Backend 0: IMAGE_API_KEY → OpenAI DALL-E 3 (skips GPU deployment entirely)
+    if (_imageApiConfig.provider === 'openai') {
+      try {
+        console.log('[AgentForge:ImageGen] Trying DALL-E 3 via IMAGE_API_KEY...');
+        return await generateWithDallE(prompt, _imageApiConfig.apiKey, width, height);
+      } catch (err: any) {
+        if (err.message?.includes('safety')) {
+          console.log('[AgentForge:ImageGen] DALL-E safety rejection — sanitizing and retrying...');
+          try {
+            return await generateWithDallE(sanitizeImagePrompt(prompt), _imageApiConfig.apiKey, width, height);
+          } catch (retryErr: any) {
+            console.warn(`[AgentForge:ImageGen] DALL-E sanitized retry failed: ${retryErr.message}`);
+          }
+        } else {
+          console.warn(`[AgentForge:ImageGen] DALL-E via IMAGE_API_KEY failed: ${err.message}, falling back to ComfyUI`);
+        }
+      }
+    }
 
     // Backend 1a: Warm ComfyUI SD 1.5 container (already booted by VideoAssembler)
     if (_nosanaImageServiceUrl && !shouldSkipNosana()) {

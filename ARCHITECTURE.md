@@ -1,6 +1,6 @@
 # AgentForge Architecture
 
-Three layers: an ElizaOS v2 plugin backend (6,477 lines TypeScript), a React 19 frontend (3,452 lines including 11 shadcn/ui components), and worker Docker containers deployed to Nosana GPU nodes. The backend plans and orchestrates DAG pipelines. The frontend visualizes them in real-time. The workers execute agent tasks on rented GPUs.
+Three layers: an ElizaOS v2 plugin backend (6,703 lines TypeScript), a React 19 frontend (3,605 lines including 11 shadcn/ui components), and worker Docker containers deployed to Nosana GPU nodes. The backend plans and orchestrates DAG pipelines. The frontend visualizes them in real-time. The workers execute agent tasks on rented GPUs.
 
 ## System Overview
 
@@ -16,7 +16,7 @@ graph TB
         Plugin[plugin-nosana]
     end
     subgraph Plugin Services
-        Orch[MissionOrchestrator - 2,473 lines]
+        Orch[MissionOrchestrator - 2,535 lines]
         Manager[NosanaManager - 1,097 lines]
         Worker[WorkerClient - 477 lines]
     end
@@ -329,7 +329,7 @@ Template-specific prompt builders handle different pipeline positions:
 Three multimodal template types execute directly (no worker deployment needed):
 
 - **image-generator**: Uses `ImageGenRouter` with fallback chain. Generates images per scene from scene-writer output. Multiple images can generate in parallel
-- **video-generator**: Boots ComfyUI SD 1.5 on Nosana if needed, generates scene images, assembles with TTS audio into MP4 slideshow via `MediaAssembler`
+- **video-generator**: Routes scene images through `ImageGenRouter.generate()` (DALL-E 3 when `IMAGE_API_KEY` set, ComfyUI SD 1.5 fallback). Assembles images + TTS audio into MP4 slideshow via `MediaAssembler`. Parses video duration from mission text (15s-300s) to calculate word count, scene count, and seconds-per-scene dynamically
 - **narrator**: Uses `generateTTS()` with ElevenLabs/OpenAI/fal.ai/Coqui fallback chain. Returns audio buffer stored in memory media store
 
 ### Media Storage
@@ -531,7 +531,7 @@ Two Docker images:
 | `OPENAI_API_URL` | orchestrator, actions, workers | empty | LLM inference endpoint |
 | `MODEL_NAME` | orchestrator, actions, workers | `Qwen3.5-27B-AWQ-4bit` | LLM model name |
 | `TAVILY_API_KEY` | workers, orchestrator | empty | Web search for researcher agents |
-| `ELEVENLABS_API_KEY` | ttsClient.ts | empty | ElevenLabs TTS (priority 1) |
+| `TTS_API_KEY` | ttsClient.ts | empty | TTS provider key. Auto-detects: sk_ = ElevenLabs, sk- = OpenAI TTS, fal_ = fal.ai |
 | `FAL_API_KEY` | ttsClient.ts | empty | fal.ai PlayAI TTS (priority 3) |
 | `FAL_KEY` | imageGenRouter.ts | empty | fal.ai Flux image generation |
 | `COMFYUI_ENDPOINT` | imageGenRouter.ts | empty | Manual ComfyUI endpoint URL |

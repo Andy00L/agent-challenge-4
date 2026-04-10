@@ -17,10 +17,18 @@ function stripDangerousPatterns(html: string): string {
     // Remove on* event handlers (quoted, unquoted, backtick-quoted)
     .replace(/\bon\w+\s*=\s*["'`][^"'`]*["'`]/gi, '')
     .replace(/\bon\w+\s*=\s*[^\s>]*/gi, '')
-    // Remove javascript: protocol (in case a link regex is ever added)
+    // Remove javascript: protocol
     .replace(/javascript\s*:/gi, '')
+    // Remove vbscript: protocol
+    .replace(/vbscript\s*:/gi, '')
     // Remove data: URIs that could execute (text/html, etc.)
-    .replace(/data\s*:\s*text\/html/gi, '');
+    .replace(/data\s*:\s*text\/html/gi, '')
+    // Remove <script> and <iframe> tags (defense-in-depth)
+    .replace(/<\s*\/?\s*script[^>]*>/gi, '')
+    .replace(/<\s*\/?\s*iframe[^>]*>/gi, '')
+    // Remove style attributes (prevent CSS injection)
+    .replace(/\bstyle\s*=\s*["'][^"']*["']/gi, '')
+    .replace(/\bstyle\s*=\s*[^\s>]*/gi, '');
 }
 
 export function renderMarkdown(text: string): string {
