@@ -6,13 +6,44 @@
 
 ![NosanaXEliza](./assets/NosanaXEliza.jpg)
 
+## 🏆 Challenge Submission Details
+
+| Field | Value |
+|-------|-------|
+| **Project Name** | AgentForge |
+| **Repository** | [github.com/Andy00L/agent-challenge-4](https://github.com/Andy00L/agent-challenge-4) |
+| **Docker Image** | `drewdockerus/agent-challenge:latest` |
+| **Video Demo** | Coming soon |
+| **Twitter** | Coming soon |
+| **Deployer Address** | `2WFKwAqjGohFyn6K7e7w7FtEy5GePXMVaQ629if8FaBy` |
+| **Host Address** | `CoDCSGhEViBhw3vSKhha2VbrtwAJ17MjpieiZLh76Vad` |
+| **Solana Address** | `ALCu5d52bEaUUKAoXw7Va5RFbvL6hGri81bmdAirb55z` |
+| **Nosana Deployment** | Coming soon |
+
+## 📦 Project Overview
+
+AgentForge is an ElizaOS v2 plugin that transforms natural language missions into multi-agent DAG pipelines orchestrated across Nosana's decentralized GPU network. Built with TypeScript, React 19, ReactFlow, and the Nosana SDK, it demonstrates deep integration with decentralized compute infrastructure for real AI workloads.
+
+### 🎯 Key Highlights
+
+- **Multi-Agent DAG Orchestration:** Plan and execute pipelines of 2-10 agents with automatic dependency resolution and parallel execution
+- **Live ReactFlow Canvas:** Watch agents deploy, process, and complete in real time with animated edges, status indicators, and click-to-view outputs
+- **Multimodal Video Pipeline:** Type "make me a 30-second video about ants" and get a narrated MP4 with AI-generated images, TTS voiceover, and FFmpeg assembly
+- **Blockchain GPU Detection:** Read GPU market availability directly from Solana via @nosana/kit. Mutex-based claim tracking prevents market oversaturation
+- **Self-Hosted LLM:** Gemma 4 26B MoE running on a Nosana RTX 3090 ($0.19/hr). No cloud API dependency for core inference
+- **Adaptive Video Duration:** Parse "30s", "2 minute", "1:30" from mission text. Dynamically calculate word count, scene count, and seconds per scene
+- **Smart API Key Routing:** TTS_API_KEY auto-detects ElevenLabs/OpenAI/fal.ai. IMAGE_API_KEY routes to DALL-E 3 (skipping ComfyUI GPU deployment)
+- **9 Agent Templates:** Researcher, writer, analyst, monitor, publisher, scene-writer, image-generator, video-generator, narrator
+- **Cost Tracking:** Live credit balance, per-agent cost/hr, total mission cost. All visible in the UI
+- **10,300+ Lines of TypeScript:** Production-grade code with security audit, 12 mermaid diagrams, comprehensive documentation
+
 An ElizaOS v2 plugin that turns natural language missions into multi-agent DAG pipelines running on Nosana's decentralized GPU network. Type "create a 30s video about ants" and it deploys 5 agents across separate GPU nodes, boots ComfyUI for image generation, generates TTS narration, and assembles a slideshow video. Type "compare CrewAI vs AutoGen vs ElizaOS" and it runs 3 researchers in parallel, merges results through an analyst, and shows everything live on a ReactFlow canvas.
 
-## Quick Start
+## 🚀 Quick Start
 
 ```bash
 # Clone
-git clone https://github.com/drew-cmd/agent-challenge-4.git
+git clone https://github.com/Andy00L/agent-challenge-4.git
 cd agent-challenge-4
 
 # Install
@@ -30,14 +61,14 @@ bun run dev
 
 Open `http://localhost:5173`. The chat connects to ElizaOS on port 3000 via Socket.IO. Fleet API runs on port 3001.
 
-### Docker
+### 🐳 Docker
 
 ```bash
 docker build -t agentforge .
 docker run -p 3000:3000 -p 3001:3001 --env-file .env agentforge
 ```
 
-### Nosana Job Definition
+### 📋 Nosana Job Definition
 
 Deploy directly to Nosana using the included job definition:
 
@@ -45,7 +76,7 @@ Deploy directly to Nosana using the included job definition:
 nosana job create nos_job_def/nosana_eliza_job_definition.json --market <market-address>
 ```
 
-## What It Does
+## ⚡ What It Does
 
 6 ElizaOS actions handle everything from single agent deployment to full parallel pipelines. The orchestrator plans a DAG, deploys one agent per GPU node, chains outputs between depth levels, and auto-stops everything when done to save credits.
 
@@ -53,7 +84,7 @@ The frontend is a split-panel app: chat on the left (Socket.IO), ReactFlow canva
 
 9 agent templates (researcher, writer, analyst, monitor, publisher, scene-writer, image-generator, video-generator, narrator) with automatic template selection from natural language. Multimodal pipeline: ComfyUI SD 1.5 for images, ElevenLabs/OpenAI/fal.ai/Coqui for TTS, FFmpeg slideshow assembly for video. Researchers get Tavily web search with a 90-second enrichment window. Workers run as Docker containers on Nosana GPU nodes via `@nosana/kit` SDK.
 
-## How It Works
+## 🔧 How It Works
 
 ```mermaid
 graph LR
@@ -74,7 +105,7 @@ graph LR
 8. Outputs chain forward. Video pipeline: scenes + images + TTS audio assembled into MP4 slideshow
 9. All agents and media services auto-stop when complete. Credits stop burning
 
-## Architecture
+## 🏗️ Architecture
 
 ```mermaid
 graph TB
@@ -108,7 +139,7 @@ graph TB
     Fleet -.->|poll 5s| Manager
 ```
 
-## Pipeline Flow
+## 🔄 Pipeline Flow
 
 Full lifecycle of a mission from user input to final output:
 
@@ -143,7 +174,7 @@ sequenceDiagram
     Canvas-->>User: Live node updates via 2s polling
 ```
 
-## Key Features
+## 🌟 Key Features
 
 **DAG Parallel Pipelines.** The orchestrator computes depth levels from the dependency graph. Agents at the same depth deploy and execute via `Promise.all`. A competitive analysis runs 3 researchers in parallel, then feeds all results to 1 analyst.
 
@@ -165,7 +196,7 @@ sequenceDiagram
 
 **Dual Socket.IO Messaging.** Two Socket.IO channels serve different purposes. ElizaOS Socket.IO (port 3000) handles user chat and bookend messages that persist to conversation history. Fleet API Socket.IO (port 3001) handles ephemeral mission progress updates, bypassing ElizaOS database inserts. The frontend connects to both and merges messages into one chat stream.
 
-## Media Pipeline
+## 🎬 Media Pipeline
 
 Video missions run a 5-step pipeline: Researcher, ScriptWriter, SceneWriter + Narrator (parallel), VideoGenerator. Image generation and TTS each have a multi-backend fallback chain.
 
@@ -193,7 +224,7 @@ flowchart LR
 
 When `IMAGE_API_KEY` is set (sk- prefix), DALL-E 3 handles all image generation (no GPU deployment needed, ~5s per image). When not set, ComfyUI uses `docker.io/nosana/comfyui:2.0.5` with SD 1.5 model from Nosana's S3 cache. Boot timeout is 600s (10 min) to allow model download. Pre-booted at T=0 alongside workers so it's ready when the VideoGenerator step needs it. The video pipeline routes all scene images through `ImageGenRouter.generate()`, which respects the IMAGE_API_KEY preference and falls back to ComfyUI on-demand if DALL-E fails.
 
-## GPU Market Selection
+## 💰 GPU Market Selection
 
 Each deployment acquires an async mutex lock, selects a market, and claims it atomically before releasing the lock. This prevents parallel deploys from all picking the same 1-node market.
 
@@ -221,7 +252,7 @@ flowchart TD
     Retry -->|No| Error[All markets exhausted]
 ```
 
-## ElizaOS Plugin Interface
+## 🔌 ElizaOS Plugin Interface
 
 | Component | Count | Details |
 |-----------|-------|---------|
@@ -235,7 +266,7 @@ flowchart TD
 | `routes` | 2 | `GET /fleet`, `GET /fleet/:id` (ElizaOS plugin routes) |
 | `tests` | 5 | GPU markets, agent templates, actions, provider, evaluator+events |
 
-## Agent Templates
+## 🤖 Agent Templates
 
 | Template | Name | Plugins | Default GPU | Purpose |
 |----------|------|---------|-------------|---------|
@@ -249,7 +280,7 @@ flowchart TD
 | `video-generator` | Slideshow Video | (none) | cpu-only | Assemble slideshow from scenes + narration |
 | `narrator` | Narrator | (none) | nvidia-3090 | Convert text to speech audio |
 
-## REST API
+## 🌐 REST API
 
 Fleet API server runs on port 3001 (default `127.0.0.1`, configurable via `FLEET_API_HOST`). Authenticated via `x-api-token` header (auto-generated or set via `FLEET_API_TOKEN`). Media endpoints are unauthenticated. 16 endpoints:
 
@@ -272,7 +303,7 @@ Fleet API server runs on port 3001 (default `127.0.0.1`, configurable via `FLEET
 | GET | `/fleet/metrics` | yes | Action execution metrics |
 | GET | `/fleet/api-docs` | yes | API endpoint documentation |
 
-## Tech Stack
+## 🛠️ Tech Stack
 
 | Layer | Technology | Version |
 |-------|-----------|---------|
@@ -289,7 +320,7 @@ Fleet API server runs on port 3001 (default `127.0.0.1`, configurable via `FLEET
 | Container | Docker | node:23-slim |
 | LLM | Qwen3.5-27B-AWQ-4bit | via Nosana inference endpoint |
 
-## Project Structure
+## 📁 Project Structure
 
 ```
 src/
@@ -352,7 +383,7 @@ worker/src/
   index.ts                                    # Dynamically configured ElizaOS agent
 ```
 
-## Environment Variables
+## ⚙️ Environment Variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -374,19 +405,21 @@ worker/src/
 | `SERVER_PORT` | No | `3000` | ElizaOS server port |
 | `CORS_ORIGIN` | No | `http://localhost:5173` | CORS origin restriction (comma-separated) |
 
-## Documentation
+## 📚 Documentation
 
 - **[ARCHITECTURE.md](./ARCHITECTURE.md)** - System design, component internals, data flow diagrams, service details
 
-## Submission
+## 🏁 Submission
 
-Built for the [Nosana x ElizaOS Builder Challenge](https://nosana.com).
+Built for the [Nosana x ElizaOS Builder Challenge](https://nosana.com/blog/builders-challenge-elizaos/).
 
-- **GitHub:** [github.com/drew-cmd/agent-challenge-4](https://github.com/drew-cmd/agent-challenge-4)
+- **GitHub:** [github.com/Andy00L/agent-challenge-4](https://github.com/Andy00L/agent-challenge-4)
 - **Docker Hub:** [`drewdockerus/agent-challenge:latest`](https://hub.docker.com/r/drewdockerus/agent-challenge), [`drewdockerus/agentforge-worker:latest`](https://hub.docker.com/r/drewdockerus/agentforge-worker)
+- **Video Demo:** Coming soon
+- **Nosana Deployment:** Coming soon
 - **Nosana Job Definition:** `nos_job_def/nosana_eliza_job_definition.json`
 - **Stack:** ElizaOS v2 + Nosana GPU Network (@nosana/kit ^2.2.4) + React 19 + ReactFlow + Zustand + Tailwind 4 + shadcn/ui
 
-## License
+## 📄 License
 
 MIT. See [LICENSE](./LICENSE).
