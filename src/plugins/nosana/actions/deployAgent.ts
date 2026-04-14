@@ -16,7 +16,7 @@ function extractDeployParams(text: string) {
   const replicas = replicaMatch ? parseInt(replicaMatch[1], 10) : 1;
 
   const imageMatch = text.match(/image[:\s]+["']?([^\s"']+)/i);
-  let dockerImage = process.env.AGENTFORGE_WORKER_IMAGE || 'drewdockerus/agentforge-worker:latest';
+  let dockerImage = process.env.AGENTFORGE_WORKER_IMAGE || 'drewdockerus/agent-challenge:latest';
   if (imageMatch) {
     // Validate Docker image name: alphanumeric, dots, hyphens, slashes, underscores, colons
     const candidate = imageMatch[1];

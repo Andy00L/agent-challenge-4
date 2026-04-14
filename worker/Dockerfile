@@ -19,17 +19,21 @@ RUN bun install
 # Apply patches using unix patch (patch-package format is standard unified diff)
 RUN cd node_modules/@elizaos/plugin-openai && patch -p1 < /app/patches/@elizaos%2Fplugin-openai@1.6.0.patch || true
 RUN cd node_modules/@ai-sdk/openai && patch -p1 < /app/patches/@ai-sdk%2Fopenai@2.0.101.patch || true
+RUN cd node_modules/@elizaos/server && patch -p1 < /app/patches/@elizaos%2Fserver@1.7.2.patch || true
 
 COPY tsconfig.json ./
 COPY src/ ./src/
 
-RUN bun run build || true
+RUN bun run build:worker
 
 RUN mkdir -p /app/data
+
+COPY worker/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
 EXPOSE 3000
 
 ENV NODE_ENV=production
 ENV SERVER_PORT=3000
 
-CMD ["bun", "run", "start"]
+CMD ["/app/entrypoint.sh"]

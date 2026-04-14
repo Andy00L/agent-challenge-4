@@ -1580,7 +1580,7 @@ Respond with ONLY the JSON array:`,
     marketName = initialMarket.name;
     marketCost = initialMarket.pricePerHour;
 
-    const workerImage = process.env.AGENTFORGE_WORKER_IMAGE || 'drewdockerus/agentforge-worker:latest';
+    const workerImage = process.env.AGENTFORGE_WORKER_IMAGE || 'drewdockerus/agent-challenge:latest';
 
     // --- Helpers ---
 
@@ -1636,8 +1636,8 @@ Respond with ONLY the JSON array:`,
       }
     };
 
-    const WORKER_BOOT_TIMEOUT = 150_000; // 150s — some nodes need 100-120s to boot
-    const MAX_MARKET_ATTEMPTS = 3;
+    const WORKER_BOOT_TIMEOUT = 300_000; // 300s — consumer GPU nodes need 90-180s; no cost to waiting longer since worker is already deployed
+    const MAX_MARKET_ATTEMPTS = 4;
 
     const waitReady = async (node: PipelineNode): Promise<boolean> => {
       if (node.status === 'error' || !node.url) return false;

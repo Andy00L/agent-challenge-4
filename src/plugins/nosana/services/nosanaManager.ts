@@ -147,6 +147,7 @@ export class NosanaManager {
             id: safeName,
             args: {
               image: params.dockerImage,
+              cmd: 'bun run start',
               expose: 3000,
               env: params.env,
             },
@@ -246,7 +247,7 @@ export class NosanaManager {
     const record = this.deployments.get(deploymentId);
     if (!record) throw new Error(`Deployment ${deploymentId} not found`);
 
-    const QUEUE_FALLBACK_MS = 30_000; // 30s — we pre-checked node availability, so queue means race condition; cut losses fast
+    const QUEUE_FALLBACK_MS = 90_000; // 90s — most Nosana queues resolve in 30-60s; premature switching wastes deploy time
     const MAX_QUEUE_MS = 600_000; // 10 min absolute max
     const queueStart = Date.now();
 
@@ -291,7 +292,15 @@ export class NosanaManager {
       }
     }
 
-    return this.deployments.get(deploymentId) || record;
+    const finalRecord = this.deployments.get(deploymentId) || record;
+    if (finalRecord.status !== 'running') {
+      const elapsed = Math.floor((Date.now() - queueStart) / 1000);
+      console.warn(`[AgentForge:Manager] ${record.name}: stuck at "${finalRecord.status}" after ${elapsed}s — aborting deployment`);
+      try { await this.stopDeployment(deploymentId); } catch { /* best effort cleanup */ }
+      this.deployments.delete(deploymentId);
+      throw new Error(`Deployment ${record.name} did not reach RUNNING after ${elapsed}s (status: ${finalRecord.status})`);
+    }
+    return finalRecord;
   }
 
   async scaleDeployment(deploymentId: string, replicas: number): Promise<NosanaDeploymentRecord> {

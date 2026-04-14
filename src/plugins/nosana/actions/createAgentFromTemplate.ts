@@ -88,7 +88,7 @@ export const createAgentFromTemplateAction: Action = {
       return { text: errMsg, success: false };
     }
 
-    const workerImage = process.env.AGENTFORGE_WORKER_IMAGE || 'drewdockerus/agentforge-worker:latest';
+    const workerImage = process.env.AGENTFORGE_WORKER_IMAGE || 'drewdockerus/agent-challenge:latest';
 
     try {
       const record = await manager.createAndStartDeployment({

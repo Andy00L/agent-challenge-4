@@ -11,6 +11,7 @@
     "start": "elizaos start",
     "build:frontend": "cd frontend && npm run build",
     "build": "tsc && cd frontend && npm run build",
+    "build:worker": "tsc",
     "test": "npx tsx tests/unit.test.ts",
     "postinstall": "patch-package"
   },
