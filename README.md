@@ -13,8 +13,8 @@
 | **Project Name** | AgentForge |
 | **Repository** | [github.com/Andy00L/agent-challenge-4](https://github.com/Andy00L/agent-challenge-4) |
 | **Docker Image** | `drewdockerus/agent-challenge:latest` |
-| **Video Demo** | — |
-| **Twitter** | — |
+| **Video Demo** | [YouTube Demo](https://youtu.be/n9hdfD3Q64g) |
+| **LinkedIn** | [LinkedIn Post](https://www.linkedin.com/posts/andy-nguema-bb4888289_github-andy00lagent-challenge-4-nosana-share-7449754484974501888-s4Xp) |
 | **Deployer Address** | `2WFKwAqjGohFyn6K7e7w7FtEy5GePXMVaQ629if8FaBy` |
 | **Host Address** | `CoDCSGhEViBhw3vSKhha2VbrtwAJ17MjpieiZLh76Vad` |
 | **Solana Address** | `ALCu5d52bEaUUKAoXw7Va5RFbvL6hGri81bmdAirb55z` |
@@ -416,6 +416,8 @@ Built for the [Nosana x ElizaOS Builder Challenge](https://nosana.com/blog/build
 
 - **GitHub:** [github.com/Andy00L/agent-challenge-4](https://github.com/Andy00L/agent-challenge-4)
 - **Docker Hub:** [`drewdockerus/agent-challenge:latest`](https://hub.docker.com/r/drewdockerus/agent-challenge), [`drewdockerus/agentforge-worker:latest`](https://hub.docker.com/r/drewdockerus/agentforge-worker)
+- **Video Demo:** [https://youtu.be/n9hdfD3Q64g](https://youtu.be/n9hdfD3Q64g)
+- **LinkedIn:** [LinkedIn Post](https://www.linkedin.com/posts/andy-nguema-bb4888289_github-andy00lagent-challenge-4-nosana-share-7449754484974501888-s4Xp)
 - **Deployment URL:** [https://2Q59LXFBaejfmVZ3ndpgKo6QCDSmi7VXJRzXtvFWHp7U.node.k8s.prd.nos.ci](https://2Q59LXFBaejfmVZ3ndpgKo6QCDSmi7VXJRzXtvFWHp7U.node.k8s.prd.nos.ci)
 - **Deployment ID:** `GxqGJ26zH1YfTuGs1vcWneK4K3UKH59BNrCQKwkSFidY`
 - **Nosana Job Definition:** `nos_job_def/nosana_eliza_job_definition.json`
