@@ -13,12 +13,13 @@
 | **Project Name** | AgentForge |
 | **Repository** | [github.com/Andy00L/agent-challenge-4](https://github.com/Andy00L/agent-challenge-4) |
 | **Docker Image** | `drewdockerus/agent-challenge:latest` |
-| **Video Demo** | Coming soon |
-| **Twitter** | Coming soon |
+| **Video Demo** | — |
+| **Twitter** | — |
 | **Deployer Address** | `2WFKwAqjGohFyn6K7e7w7FtEy5GePXMVaQ629if8FaBy` |
 | **Host Address** | `CoDCSGhEViBhw3vSKhha2VbrtwAJ17MjpieiZLh76Vad` |
 | **Solana Address** | `ALCu5d52bEaUUKAoXw7Va5RFbvL6hGri81bmdAirb55z` |
-| **Nosana Deployment** | Coming soon |
+| **Deployment URL** | [Live Demo](https://2Q59LXFBaejfmVZ3ndpgKo6QCDSmi7VXJRzXtvFWHp7U.node.k8s.prd.nos.ci) |
+| **Deployment ID** | `GxqGJ26zH1YfTuGs1vcWneK4K3UKH59BNrCQKwkSFidY` |
 
 ## 📦 Project Overview
 
@@ -415,8 +416,8 @@ Built for the [Nosana x ElizaOS Builder Challenge](https://nosana.com/blog/build
 
 - **GitHub:** [github.com/Andy00L/agent-challenge-4](https://github.com/Andy00L/agent-challenge-4)
 - **Docker Hub:** [`drewdockerus/agent-challenge:latest`](https://hub.docker.com/r/drewdockerus/agent-challenge), [`drewdockerus/agentforge-worker:latest`](https://hub.docker.com/r/drewdockerus/agentforge-worker)
-- **Video Demo:** Coming soon
-- **Nosana Deployment:** Coming soon
+- **Deployment URL:** [https://2Q59LXFBaejfmVZ3ndpgKo6QCDSmi7VXJRzXtvFWHp7U.node.k8s.prd.nos.ci](https://2Q59LXFBaejfmVZ3ndpgKo6QCDSmi7VXJRzXtvFWHp7U.node.k8s.prd.nos.ci)
+- **Deployment ID:** `GxqGJ26zH1YfTuGs1vcWneK4K3UKH59BNrCQKwkSFidY`
 - **Nosana Job Definition:** `nos_job_def/nosana_eliza_job_definition.json`
 - **Stack:** ElizaOS v2 + Nosana GPU Network (@nosana/kit ^2.2.4) + React 19 + ReactFlow + Zustand + Tailwind 4 + shadcn/ui
 
